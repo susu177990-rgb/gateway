@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gateway</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Gateway</h1>
+          <p id="statusLine">正在读取本地服务状态</p>
+        </div>
+        <div class="actions">
+          <button id="reloadBtn" type="button">刷新</button>
+          <button id="addBtn" type="button">添加渠道</button>
+          <button id="saveBtn" type="button" class="primary">保存配置</button>
+        </div>
+      </header>
+
+      <section class="summary" aria-label="Gateway summary">
+        <div>
+          <span>入口</span>
+          <strong id="entryValue">http://127.0.0.1:7080/v1/messages</strong>
+        </div>
+        <div>
+          <span>入口协议</span>
+          <div class="segmented" id="entryProtocol">
+            <button type="button" data-protocol="anthropic" class="active">Anthropic</button>
+            <button type="button" data-protocol="openai">OpenAI</button>
+          </div>
+        </div>
+        <div>
+          <span>上游</span>
+          <strong id="providerCount">-</strong>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-title">
+          <h2>模型渠道</h2>
+          <p>Base URL 请填写上游完整请求地址，Gateway 不会自动补路径。</p>
+        </div>
+        <div id="routes" class="routes"></div>
+      </section>
+
+      <template id="routeTemplate">
+        <article class="route">
+          <div class="route-head">
+            <label class="switch" title="启用渠道">
+              <input data-field="enabled" type="checkbox" />
+              <span></span>
+            </label>
+            <input data-field="name" class="name" placeholder="渠道名称" />
+            <button data-action="test" type="button">测试</button>
+            <button data-action="delete" type="button">删除</button>
+          </div>
+
+          <div class="grid simple">
+            <label>
+              <span>完整请求 URL</span>
+              <input data-field="baseUrl" placeholder="https://example.com/v1/chat/completions" />
+            </label>
+            <label>
+              <span>API Key</span>
+              <input data-field="apiKey" placeholder="API Key" />
+            </label>
+          </div>
+
+          <div class="models">
+            <div class="models-head">
+              <span>模型列表</span>
+              <button data-action="add-model" type="button">添加模型</button>
+            </div>
+            <div data-role="models" class="model-list"></div>
+          </div>
+
+          <div class="route-foot">
+            <span data-role="testState"></span>
+          </div>
+        </article>
+      </template>
+
+      <template id="modelTemplate">
+        <div class="model-row">
+          <input data-role="model-name" placeholder="模型 ID" />
+          <button data-action="set-default" type="button">默认</button>
+          <button data-action="remove-model" type="button">删除</button>
+        </div>
+      </template>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

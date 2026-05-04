@@ -1,0 +1,23 @@
+.DS_Store
+
+# Runtime configuration and secrets
+models.json
+*.local.json
+.env
+.env.*
+
+# Logs
+*.log
+gateway.log
+gateway.err.log
+
+# Local certificates
+certs/
+
+# Local tool state
+.omc/
+
+# Dependencies and build artifacts
+node_modules/
+dist/
+coverage/

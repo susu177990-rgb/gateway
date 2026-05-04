@@ -1,0 +1,30 @@
+{
+  "routes": [
+    {
+      "id": "nvidia",
+      "name": "NVIDIA NIM",
+      "type": "openai-chat",
+      "baseUrl": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "apiKey": "replace-with-your-api-key",
+      "enabled": true,
+      "defaultModel": "minimaxai/minimax-m2.7",
+      "models": [
+        "minimaxai/minimax-m2.7",
+        "z-ai/glm-5.1",
+        "openai/gpt-oss-120b"
+      ]
+    },
+    {
+      "id": "lm-studio",
+      "name": "LM Studio",
+      "type": "openai-chat",
+      "baseUrl": "http://127.0.0.1:1234/v1/chat/completions",
+      "apiKey": "not-required-for-local-only",
+      "enabled": false,
+      "defaultModel": "openai/gpt-oss-20b",
+      "models": [
+        "openai/gpt-oss-20b"
+      ]
+    }
+  ]
+}
