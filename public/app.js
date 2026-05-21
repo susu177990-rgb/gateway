@@ -271,8 +271,6 @@ function renderCardView(node, route) {
             <code class="mono">${escapeHtml(model)}</code>
             ${idx === 0 ? '<span class="view-model-badge">默认</span>' : ""}
           </div>
-          <span class="model-test-state" data-role="modelTestState" aria-live="polite"></span>
-          <button type="button" class="btn btn-ghost btn-xs" data-action="test-model" data-model="${escapeHtml(model)}">测试</button>
         </li>`,
     )
     .join("");
@@ -457,17 +455,6 @@ function bindRoute(node, route, index) {
     scheduleAutosave();
   });
 
-  node.addEventListener("click", async (event) => {
-    const testBtn = event.target.closest('[data-action="test-model"]');
-    if (!testBtn || !node.contains(testBtn)) return;
-    const modelCell = testBtn.closest(".model-cell");
-    const modelId = modelCell
-      ? modelCell.querySelector('[data-role="model-name"]')?.value
-      : testBtn.dataset.model;
-    const stateEl = testBtn.closest(".model-cell, .view-model")?.querySelector('[data-role="modelTestState"]');
-    await runChannelModelTest(route, index, modelId, testBtn, stateEl);
-  });
-
   applyCardMode(node, route, index);
 }
 
@@ -515,12 +502,21 @@ function bindModels(node, route, onEdit) {
         onEdit();
       });
 
-      removeBtn.addEventListener("click", () => {
+      removeBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
         route.models.splice(idx, 1);
         if (!route.models.length) route.models.push("");
         syncDefaultModel(route);
         draw();
         onEdit();
+      });
+
+      const testBtn = row.querySelector('[data-action="test-model"]');
+      const testState = row.querySelector('[data-role="modelTestState"]');
+      testBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await runChannelModelTest(route, index, input.value, testBtn, testState);
       });
 
       list.appendChild(row);
@@ -532,7 +528,7 @@ function bindModels(node, route, onEdit) {
     route.models.push("");
     draw();
     onEdit();
-    list.querySelector(".model-cell:last-child .model-input")?.focus();
+    list.querySelector(".model-cell:last-child [data-role='model-name']")?.focus();
   });
 
   syncDefaultModel(route);

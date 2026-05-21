@@ -559,10 +559,28 @@ body::before {
 }
 
 .model-cell {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto 28px;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.model-cell .input {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.model-cell [data-role="modelTestState"] {
+  grid-column: 2;
+}
+
+.model-cell [data-action="test-model"] {
+  grid-column: 3;
+}
+
+.model-cell [data-action="remove-model"] {
+  grid-column: 4;
 }
 
 .model-test-state {
@@ -582,7 +600,7 @@ body::before {
   color: #f87171;
 }
 
-.model-cell .input {
+.model-cell .input-mono {
   border-radius: var(--r-lg);
 }
 
