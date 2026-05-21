@@ -9,7 +9,8 @@ The gateway exposes local endpoints on `127.0.0.1`, provides a small browser UI 
 - Local HTTP endpoint: `http://127.0.0.1:7080`
 - Local HTTPS endpoint: `https://127.0.0.1:7443`
 - Anthropic-compatible entrypoint: `POST /v1/messages`
-- OpenAI-compatible entrypoint: `POST /v1/chat/completions`
+- **Primary OpenAI Chat Completions entrypoint:** `POST /v1/chat/completions`
+- OpenAI-compatible aliases: `POST /v1`, `POST /v1/unified/chat`
 - Model list endpoint: `GET /v1/models`
 - Browser UI for adding, testing, enabling, and disabling channels
 - Per-channel model routing through `models.json`
@@ -50,6 +51,11 @@ Create it from the example:
 cp models.example.json models.json
 ```
 
+Top-level fields:
+
+- `defaultModel`: **Gateway-wide default** — used when a client request omits `model` (configure in the admin UI under「Gateway 默认模型」)
+- `routes`: array of provider channels
+
 Each route should include:
 
 - `name`: display name in the UI
@@ -57,7 +63,7 @@ Each route should include:
 - `baseUrl`: the full upstream request URL
 - `apiKey`: upstream API key or bearer token
 - `enabled`: whether the route is active
-- `defaultModel`: default model for that route
+- `defaultModel`: default model for that channel (used for channel test; first model in the UI list)
 - `models`: model IDs that should route to this provider
 
 Example upstream URLs:
@@ -70,13 +76,66 @@ https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
 
 Important: `baseUrl` is treated as the final upstream request URL. The gateway does not append `/chat/completions`, `/messages`, or any other provider path.
 
-## Local Entrypoints
+## Agent integration (single API surface)
 
-Use these URLs from local clients:
+For other agents or OpenAI-compatible clients, standardize on **one URL** and **one request shape**:
+
+- **Chat URL:** `POST http://127.0.0.1:7080/v1/chat/completions`
+- **Body:** same as OpenAI Chat Completions (`model`, `messages`, optional `stream`, `temperature`, …)
+- **Model list:** `GET http://127.0.0.1:7080/v1/models`
+
+The `model` string must match a model configured under some enabled route in `models.json` (same IDs you see in the admin UI).
+
+### Hermes Desktop（保存路由后自动同步）
+
+Hermes 桌面应用读的是 **`~/.hermes/models.json`**，不会自动发现网关。本仓库在 **管理页保存路由**（写入 `models.json`）成功后会 **异步运行** `npm run sync:hermes` 所用的脚本，把 `GET /v1/models` 的结果写回 Hermes（保留非 `127.0.0.1:<HTTP_PORT>/v1` 的其它预设）。保存后请 **⌘Q 退出再打开 Hermes** 以刷新列表。
+
+- **关闭自动同步：** `HERMES_AUTO_SYNC=0 npm start`
+- **手动同步：** `npm run sync:hermes`（网关需在运行；若启用 `GATEWAY_API_KEY`，请在 shell 里导出同名变量后再运行）
+
+### One API key for all agents (optional)
+
+Set a single shared key on the gateway process:
+
+```bash
+export GATEWAY_API_KEY="your-long-random-secret"
+npm start
+```
+
+When `GATEWAY_API_KEY` is set, all clients must send the **same** value when calling `GET/POST` under `/v1/*`, `/health`, and `/admin/*`:
+
+- `Authorization: Bearer <GATEWAY_API_KEY>`
+- or header `x-api-key: <GATEWAY_API_KEY>`
+
+Upstream provider keys still live only in `models.json`; agents **do not** need those keys.
+
+Static assets (`/`, `/app.js`, `/styles.css`) stay unauthenticated so the admin page can load; use the **访问密钥** field in the UI (stored in the browser) to authorize admin and health requests.
+
+On macOS LaunchAgents, add:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>GATEWAY_API_KEY</key>
+  <string>your-long-random-secret</string>
+</dict>
+```
+
+These paths behave the same as `/v1/chat/completions` for chat requests:
 
 ```text
-http://127.0.0.1:7080/v1/messages
+POST http://127.0.0.1:7080/v1
+POST http://127.0.0.1:7080/v1/unified/chat
+```
+
+Use `POST /v1/messages` only if the agent natively speaks Anthropic Messages.
+
+## Local Entrypoints
+
+```text
 http://127.0.0.1:7080/v1/chat/completions
+http://127.0.0.1:7080/v1/unified/chat
+http://127.0.0.1:7080/v1/messages
 http://127.0.0.1:7080/v1/models
 ```
 

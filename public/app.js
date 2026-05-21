@@ -1,223 +1,567 @@
 const routesEl = document.querySelector("#routes");
 const routeTemplate = document.querySelector("#routeTemplate");
 const modelTemplate = document.querySelector("#modelTemplate");
-const statusLine = document.querySelector("#statusLine");
-const providerCount = document.querySelector("#providerCount");
-const entryValue = document.querySelector("#entryValue");
-const entryProtocol = document.querySelector("#entryProtocol");
+const statusEl = document.querySelector("#status");
+const addBtn = document.querySelector("#addBtn");
+const entryList = document.querySelector("#entryList");
+const gatewayClientKey = document.querySelector("#gatewayClientKey");
+const gatewayDefaultModelEl = document.querySelector("#gatewayDefaultModel");
+
+const GATEWAY_KEY_STORAGE = "gateway.clientApiKey";
+const AUTOSAVE_MS = 600;
+const gatewayOrigin = `${window.location.protocol}//${window.location.hostname}:${window.location.port || "7080"}`;
+const ENTRY_URLS = {
+  anthropic: `${gatewayOrigin}/v1/messages`,
+  openai: `${gatewayOrigin}/v1/chat/completions`,
+};
 
 let routes = [];
-let activeEntryProtocol = localStorage.getItem("gateway.entryProtocol") || "anthropic";
+let gatewayDefaultModel = "";
+let baseStatus = "正在读取本地服务状态…";
+let saveState = "idle";
+let saveStateDetail = "";
+let autosaveTimer = null;
+let saveInFlight = false;
+let pendingSave = false;
+let hydrating = false;
+const editingRouteKeys = new Set();
 
-document.querySelector("#reloadBtn").addEventListener("click", load);
-document.querySelector("#addBtn").addEventListener("click", () => {
-  const id = nextProviderId();
-  routes.push({
-    id,
+function cloneTemplate(template) {
+  const source = template?.content?.firstElementChild;
+  if (!source) throw new Error("页面模板缺失，请强制刷新（Cmd+Shift+R）");
+  return source.cloneNode(true);
+}
+
+function updateStatusDisplay() {
+  const saveHint =
+    saveState === "pending"
+      ? " · 待保存…"
+      : saveState === "saving"
+        ? " · 保存中…"
+        : saveState === "saved"
+          ? " · 已自动保存"
+          : saveState === "error"
+            ? ` · 保存失败：${saveStateDetail}`
+            : "";
+
+  const textEl = statusEl.querySelector(".status-text") || statusEl;
+  textEl.textContent = `${baseStatus}${saveHint}`;
+
+  statusEl.classList.remove("is-ok", "is-pending", "is-error");
+  if (saveState === "error" || baseStatus.includes("失败") || baseStatus.includes("需要统一")) {
+    statusEl.classList.add("is-error");
+  } else if (saveState === "pending" || saveState === "saving") {
+    statusEl.classList.add("is-pending");
+  } else if (baseStatus.startsWith("运行中")) {
+    statusEl.classList.add("is-ok");
+  }
+}
+
+function setBaseStatus(text) {
+  baseStatus = text;
+  updateStatusDisplay();
+}
+
+function setSaveState(state, detail = "") {
+  saveState = state;
+  saveStateDetail = detail;
+  updateStatusDisplay();
+  if (state === "saved") {
+    setTimeout(() => {
+      if (saveState === "saved") setSaveState("idle");
+    }, 2000);
+  }
+}
+
+function scheduleAutosave() {
+  if (hydrating) return;
+  setSaveState("pending");
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => {
+    flushAutosave();
+  }, AUTOSAVE_MS);
+}
+
+async function flushAutosave() {
+  if (hydrating) return;
+  if (saveInFlight) {
+    pendingSave = true;
+    return;
+  }
+
+  saveInFlight = true;
+  pendingSave = false;
+  setSaveState("saving");
+
+  try {
+    const saved = await persist();
+    routes = saved.routes || routes;
+    gatewayDefaultModel = saved.defaultModel ?? gatewayDefaultModel;
+    if (gatewayDefaultModelEl) gatewayDefaultModelEl.value = gatewayDefaultModel;
+    refreshGatewayModelSelect();
+    setSaveState("saved");
+  } catch (err) {
+    setSaveState("error", err.message || String(err));
+  } finally {
+    saveInFlight = false;
+    if (pendingSave) flushAutosave();
+  }
+}
+
+addBtn.addEventListener("click", addRoute);
+
+renderEntryUrls();
+
+entryList?.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-copy]");
+  if (!button) return;
+  const key = button.dataset.copy;
+  const url = ENTRY_URLS[key];
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    const prev = button.textContent;
+    button.textContent = "已复制";
+    setTimeout(() => {
+      button.textContent = prev;
+    }, 1200);
+  } catch {
+    window.prompt("复制以下地址：", url);
+  }
+});
+
+gatewayClientKey?.addEventListener("input", () => {
+  const value = gatewayClientKey.value.trim();
+  if (value) localStorage.setItem(GATEWAY_KEY_STORAGE, value);
+  else localStorage.removeItem(GATEWAY_KEY_STORAGE);
+});
+
+gatewayClientKey?.addEventListener("change", () => {
+  if (gatewayClientKey.value.trim()) load();
+});
+
+gatewayClientKey?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && gatewayClientKey.value.trim()) load();
+});
+
+if (gatewayClientKey) {
+  gatewayClientKey.value = localStorage.getItem(GATEWAY_KEY_STORAGE) || "";
+}
+
+gatewayDefaultModelEl?.addEventListener("change", () => {
+  gatewayDefaultModel = gatewayDefaultModelEl.value;
+  scheduleAutosave();
+});
+
+load();
+
+function listAllModelIds() {
+  const ids = new Set();
+  for (const route of routes) {
+    for (const model of route.models || []) {
+      const id = String(model).trim();
+      if (id) ids.add(id);
+    }
+  }
+  return [...ids].sort();
+}
+
+function refreshGatewayModelSelect() {
+  if (!gatewayDefaultModelEl) return;
+
+  const current = (gatewayDefaultModelEl.value || gatewayDefaultModel || "").trim();
+  const ids = listAllModelIds();
+  if (current && !ids.includes(current)) ids.unshift(current);
+
+  gatewayDefaultModelEl.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = ids.length ? "选择默认模型" : "请先配置渠道模型";
+  gatewayDefaultModelEl.appendChild(placeholder);
+
+  for (const id of ids) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = id;
+    gatewayDefaultModelEl.appendChild(opt);
+  }
+
+  gatewayDefaultModelEl.value = current && ids.includes(current) ? current : "";
+}
+
+function routeKey(route, index) {
+  return route.id || `__idx_${index}`;
+}
+
+function isRouteEditing(route, index) {
+  return Boolean(route._isNew) || editingRouteKeys.has(routeKey(route, index));
+}
+
+function setRouteEditing(route, index, editing) {
+  const key = routeKey(route, index);
+  if (editing) editingRouteKeys.add(key);
+  else {
+    editingRouteKeys.delete(key);
+    delete route._isNew;
+  }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function renderCardView(node, route) {
+  node.querySelector('[data-role="nameView"]').textContent = route.name?.trim() || "未命名";
+  node.querySelector('[data-view="baseUrl"]').textContent = route.baseUrl?.trim() || "—";
+  node.querySelector('[data-view="apiKey"]').textContent = route.apiKey?.trim() || "—";
+
+  const list = node.querySelector('[data-role="viewModels"]');
+  const models = (route.models || []).map((m) => String(m).trim()).filter(Boolean);
+  if (!models.length) {
+    list.innerHTML = '<li class="view-models-empty">暂无模型</li>';
+    return;
+  }
+  list.innerHTML = models
+    .map(
+      (model, idx) =>
+        `<li class="view-model${idx === 0 ? " view-model--default" : ""}"><code class="mono">${escapeHtml(model)}</code>${idx === 0 ? '<span class="view-model-badge">默认</span>' : ""}</li>`,
+    )
+    .join("");
+}
+
+function syncFormFromRoute(node, route) {
+  node.querySelector('[data-field="name"]').value = route.name || "";
+  node.querySelector('[data-field="baseUrl"]').value = route.baseUrl || "";
+  const apiKeyInput = node.querySelector('[data-field="apiKey"]');
+  apiKeyInput.value = route.apiKey || "";
+  apiKeyInput.placeholder = route.apiKey ? "已配置（留空保存则保留原密钥）" : "上游密钥";
+}
+
+function applyCardMode(node, route, index) {
+  const editing = isRouteEditing(route, index);
+  node.classList.toggle("card--editing", editing);
+  if (editing) syncFormFromRoute(node, route);
+  else renderCardView(node, route);
+}
+
+function addRoute() {
+  const route = {
+    id: nextProviderId(),
     name: "新渠道",
     type: "openai-chat",
     baseUrl: "",
     apiKey: "",
     enabled: true,
     defaultModel: "",
-    models: [],
-  });
+    models: [""],
+    _isNew: true,
+  };
+  routes.push(route);
+  editingRouteKeys.add(routeKey(route, routes.length - 1));
   render();
-});
-document.querySelector("#saveBtn").addEventListener("click", save);
-entryProtocol.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-protocol]");
-  if (!button) return;
-  activeEntryProtocol = button.dataset.protocol;
-  localStorage.setItem("gateway.entryProtocol", activeEntryProtocol);
-  renderEntryProtocol();
-});
-
-load();
+  routesEl.querySelector(".card:last-child [data-field='name']")?.focus();
+}
 
 async function load() {
-  const [health, config] = await Promise.all([fetchJson("/health"), fetchJson("/admin/routes")]);
-  routes = config.routes;
-  statusLine.textContent = `运行中，默认模型：${health.defaultModel || "-"}`;
-  providerCount.textContent = `${health.providerCount} 个启用渠道`;
-  renderEntryProtocol();
+  hydrating = true;
+  clearTimeout(autosaveTimer);
+  setSaveState("idle");
+
+  let health = null;
+  let config = null;
+
+  try {
+    health = await fetchJson("/health");
+  } catch (err) {
+    const needsAuth = /401|authentication|API key/i.test(String(err.message));
+    setBaseStatus(
+      needsAuth
+        ? "需要统一 API Key：请在下方填写后重新打开页面"
+        : `连接失败: ${err.message}（请确认已运行 npm start）`,
+    );
+    hydrating = false;
+    render();
+    return;
+  }
+
+  try {
+    config = await fetchJson("/admin/routes");
+  } catch (err) {
+    const needsAuth = /401|authentication|API key/i.test(String(err.message));
+    setBaseStatus(
+      needsAuth
+        ? "需要统一 API Key：请在下方填写后重新打开页面"
+        : `读取渠道失败: ${err.message}`,
+    );
+    hydrating = false;
+    render();
+    return;
+  }
+
+  routes = Array.isArray(config.routes) ? config.routes : [];
+  gatewayDefaultModel = config.defaultModel || health.defaultModel || "";
+  if (gatewayDefaultModelEl) gatewayDefaultModelEl.value = gatewayDefaultModel;
+  refreshGatewayModelSelect();
+  const authHint = health.gatewayClientAuth?.required ? " · 网关鉴权已开启" : "";
+  setBaseStatus(`运行中 · 共 ${routes.length} 个渠道 · Gateway 默认：${health.defaultModel || "-"}${authHint}`);
+  hydrating = false;
   render();
 }
 
-function renderEntryProtocol() {
-  entryProtocol.querySelectorAll("button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.protocol === activeEntryProtocol);
+function renderEntryUrls() {
+  entryList?.querySelectorAll(".entry-url[data-entry]").forEach((el) => {
+    const key = el.dataset.entry;
+    el.textContent = ENTRY_URLS[key] || "";
   });
-  entryValue.textContent =
-    activeEntryProtocol === "anthropic"
-      ? "http://127.0.0.1:7080/v1/messages"
-      : "http://127.0.0.1:7080/v1/chat/completions";
-  statusLine.textContent =
-    activeEntryProtocol === "anthropic"
-      ? "入口协议已切换为 Anthropic Messages"
-      : "入口协议已切换为 OpenAI Chat Completions";
 }
 
 function render() {
-  routesEl.textContent = "";
+  routesEl.innerHTML = "";
+
+  if (!routes.length) {
+    const empty = document.createElement("div");
+    empty.className = "routes-empty";
+    empty.innerHTML =
+      "<strong>暂无渠道</strong>点击上方「添加渠道」新建，或检查 Gateway 是否在运行、访问密钥是否正确。";
+    routesEl.appendChild(empty);
+    return;
+  }
+
   routes.forEach((route, index) => {
-    const node = routeTemplate.content.firstElementChild.cloneNode(true);
+    const node = cloneTemplate(routeTemplate);
     bindRoute(node, route, index);
     routesEl.appendChild(node);
   });
-  routesEl.querySelector(".route:last-child .name")?.focus();
+  refreshGatewayModelSelect();
 }
 
 function bindRoute(node, route, index) {
-  bindField(node, route, "enabled");
-  bindField(node, route, "name");
-  bindField(node, route, "baseUrl");
-  bindField(node, route, "apiKey");
-  route.type = "openai-chat";
-  bindModels(node, route);
+  const onFieldEdit = () => {
+    if (isRouteEditing(route, index)) scheduleAutosave();
+  };
 
-  node.querySelector("[data-action='delete']").addEventListener("click", () => {
-    routes.splice(index, 1);
-    render();
+  const toggle = node.querySelector('[data-field="enabled"]');
+  toggle.checked = route.enabled !== false;
+  const syncDisabled = () => {
+    node.classList.toggle("card--disabled", !toggle.checked);
+  };
+  syncDisabled();
+  toggle.addEventListener("change", () => {
+    route.enabled = toggle.checked;
+    syncDisabled();
+    scheduleAutosave();
+    if (!isRouteEditing(route, index)) renderCardView(node, route);
   });
 
-  const testButton = node.querySelector("[data-action='test']");
-  testButton.addEventListener("click", async () => {
-    const state = node.querySelector("[data-role='testState']");
-    state.className = "";
-    state.textContent = "测试中...";
-    testButton.disabled = true;
-    testButton.textContent = "测试中";
+  const nameInput = node.querySelector('[data-field="name"]');
+  const baseUrlInput = node.querySelector('[data-field="baseUrl"]');
+  const apiKeyInput = node.querySelector('[data-field="apiKey"]');
+
+  nameInput.addEventListener("input", () => {
+    route.name = nameInput.value;
+    onFieldEdit();
+  });
+  baseUrlInput.addEventListener("input", () => {
+    route.baseUrl = baseUrlInput.value;
+    onFieldEdit();
+  });
+  apiKeyInput.addEventListener("input", () => {
+    route.apiKey = apiKeyInput.value;
+    onFieldEdit();
+  });
+
+  route.type = "openai-chat";
+  normalizeRouteModels(route);
+  bindModels(node, route, onFieldEdit);
+
+  node.querySelector('[data-action="edit"]').addEventListener("click", () => {
+    setRouteEditing(route, index, true);
+    applyCardMode(node, route, index);
+    nameInput.focus();
+  });
+
+  node.querySelector('[data-action="save"]').addEventListener("click", async () => {
+    route.name = nameInput.value;
+    route.baseUrl = baseUrlInput.value;
+    route.apiKey = apiKeyInput.value;
+    syncDefaultModel(route);
+
+    try {
+      await flushAutosave();
+      setRouteEditing(route, index, false);
+      applyCardMode(node, route, index);
+    } catch (err) {
+      setSaveState("error", err.message || String(err));
+    }
+  });
+
+  node.querySelector('[data-action="delete"]').addEventListener("click", () => {
+    if (!confirm(`确定删除渠道「${route.name || "未命名"}」？`)) return;
+    editingRouteKeys.delete(routeKey(route, index));
+    routes.splice(index, 1);
+    render();
+    scheduleAutosave();
+  });
+
+  const testBtn = node.querySelector('[data-action="test"]');
+  const testState = node.querySelector('[data-role="testState"]');
+  testBtn.addEventListener("click", async () => {
+    testState.textContent = "测试中…";
+    testState.className = "card-message";
+    testBtn.disabled = true;
+
     try {
       validateRouteForTest(route);
-      const saved = await persist(false);
-      routes = saved.routes;
+      await flushAutosave();
       const current = routes[index] || route;
       const result = await fetchJson("/admin/test", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ routeId: current.id, model: current.defaultModel || current.models?.[0] }),
+        body: JSON.stringify({
+          routeId: current.id,
+          model: current.defaultModel || String(current.models?.[0] || "").trim(),
+        }),
       });
-      state.className = result.ok ? "ok" : "error";
-      state.textContent = result.ok ? `测试成功 · ${result.latencyMs}ms · ${result.reply || "已响应"}` : result.error;
-      testButton.textContent = result.ok ? "成功" : "测试";
+
+      if (result.ok) {
+        testState.textContent = `✓ 成功 · ${result.latencyMs}ms · ${result.reply || "已响应"}`;
+        testState.className = "card-message ok";
+      } else {
+        testState.textContent = `✗ ${result.error || "失败"}`;
+        testState.className = "card-message error";
+      }
     } catch (err) {
-      state.className = "error";
-      state.textContent = String(err.message || err);
-      testButton.textContent = "测试";
+      testState.textContent = `✗ ${err.message}`;
+      testState.className = "card-message error";
     } finally {
-      testButton.disabled = false;
+      testBtn.disabled = false;
     }
   });
+
+  applyCardMode(node, route, index);
 }
 
-function bindField(node, route, key) {
-  const field = node.querySelector(`[data-field="${key}"]`);
-  if (!field) return;
-  if (key === "enabled") {
-    field.checked = route.enabled !== false;
-    field.addEventListener("change", () => (route.enabled = field.checked));
-    return;
-  }
-  if (key === "apiKey") {
-    field.value = route.apiKey || "";
-    field.addEventListener("input", () => (route.apiKey = field.value));
-    return;
-  }
-  field.value = route[key] || "";
-  field.addEventListener("input", () => {
-    route[key] = field.value;
-  });
+function syncDefaultModel(route) {
+  route.defaultModel = String(route.models?.[0] ?? "").trim();
 }
 
-function bindModels(node, route) {
-  const list = node.querySelector("[data-role='models']");
-  const addButton = node.querySelector("[data-action='add-model']");
+function normalizeRouteModels(route) {
+  const models = [...(route.models || [])];
+  if (!models.length) {
+    route.models = [""];
+    route.defaultModel = "";
+    return;
+  }
+  const preferred = route.defaultModel || models.find((m) => String(m).trim()) || models[0];
+  const rest = models.filter((m) => m !== preferred);
+  route.models = [preferred, ...rest];
+  syncDefaultModel(route);
+}
+
+function bindModels(node, route, onEdit) {
+  const list = node.querySelector('[data-role="models"]');
+  const addModelBtn = node.querySelector('[data-action="add-model"]');
+
   const draw = () => {
-    list.textContent = "";
-    const models = route.models || [];
-    if (!models.length) {
-      const empty = document.createElement("div");
-      empty.className = "empty";
-      empty.textContent = "还没有模型，点击“添加模型”。";
-      list.appendChild(empty);
-      return;
+    list.innerHTML = "";
+    if (!route.models?.length) {
+      route.models = [""];
     }
-    models.forEach((model, index) => {
-      const row = modelTemplate.content.firstElementChild.cloneNode(true);
-      const input = row.querySelector("[data-role='model-name']");
-      const defaultButton = row.querySelector("[data-action='set-default']");
+
+    route.models.forEach((model, idx) => {
+      const row = cloneTemplate(modelTemplate);
+      const input = row.querySelector('[data-role="model-name"]');
+      const removeBtn = row.querySelector('[data-action="remove-model"]');
+
+      if (idx === 0) {
+        row.classList.add("is-default");
+        input.placeholder = "默认模型 ID";
+      }
+
       input.value = model;
       input.addEventListener("input", () => {
-        route.models[index] = input.value.trim();
-        if (route.defaultModel === model) route.defaultModel = route.models[index];
+        route.models[idx] = input.value;
+        syncDefaultModel(route);
+        onEdit();
       });
-      defaultButton.classList.toggle("active", route.defaultModel === model);
-      defaultButton.textContent = route.defaultModel === model ? "默认模型" : "设为默认";
-      defaultButton.addEventListener("click", () => {
-        route.defaultModel = route.models[index];
+
+      removeBtn.addEventListener("click", () => {
+        route.models.splice(idx, 1);
+        if (!route.models.length) route.models.push("");
+        syncDefaultModel(route);
         draw();
+        onEdit();
       });
-      row.querySelector("[data-action='remove-model']").addEventListener("click", () => {
-        const removed = route.models.splice(index, 1)[0];
-        if (route.defaultModel === removed) route.defaultModel = route.models[0] || "";
-        draw();
-      });
+
       list.appendChild(row);
     });
   };
-  addButton.addEventListener("click", () => {
+
+  addModelBtn.addEventListener("click", () => {
     route.models = route.models || [];
     route.models.push("");
     draw();
-    list.querySelector(".model-row:last-child input")?.focus();
+    onEdit();
+    list.querySelector(".model-cell:last-child .model-input")?.focus();
   });
+
+  syncDefaultModel(route);
   draw();
 }
 
 function validateRouteForTest(route) {
   if (!route.name?.trim()) throw new Error("请先填写渠道名称");
-  if (!route.baseUrl?.trim()) throw new Error("请先填写 Base URL");
+  if (!route.baseUrl?.trim()) throw new Error("请先填写完整请求 URL");
   if (!route.apiKey?.trim()) throw new Error("请先填写 API Key");
   const model = route.defaultModel || route.models?.find(Boolean);
-  if (!model?.trim()) throw new Error("请先添加至少一个模型，并设为默认");
-}
-
-async function save(showStatus = true) {
-  const config = await persist(showStatus);
-  routes = config.routes;
-  if (showStatus) {
-    statusLine.textContent = "已保存。入口会在下一次读取模型时看到新配置。";
-  }
-  render();
+  if (!model?.trim()) throw new Error("请先填写第一个模型（即默认模型）");
 }
 
 async function persist() {
   const payload = {
+    defaultModel: (gatewayDefaultModelEl?.value || gatewayDefaultModel || "").trim(),
     routes: routes.map((route) => {
-      const models = (route.models || []).map((model) => model.trim()).filter(Boolean);
+      const models = (route.models || []).map((m) => m.trim()).filter(Boolean);
+      const apiKey = (route.apiKey || "").trim();
       return {
-        ...route,
         id: route.id || slug(route.name),
-        apiKey: route.apiKey || "",
+        name: route.name,
+        type: route.type,
+        baseUrl: route.baseUrl,
+        apiKey: apiKey || "__KEEP__",
+        enabled: route.enabled,
         models,
-        defaultModel: models.includes(route.defaultModel) ? route.defaultModel : models[0] || "",
+        defaultModel: models[0] || "",
       };
     }),
   };
   return fetchJson("/admin/routes", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 }
 
-async function fetchJson(url, options) {
-  const response = await fetch(url, options);
+function authHeaders() {
+  const key = (gatewayClientKey?.value || localStorage.getItem(GATEWAY_KEY_STORAGE) || "").trim();
+  if (!key) return {};
+  return { Authorization: `Bearer ${key}` };
+}
+
+async function fetchJson(url, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...authHeaders(),
+    ...(options.headers || {}),
+  };
+  const response = await fetch(url, { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
   if (!response.ok) {
-    const message = data.error?.message || data.error || text || `${response.status}`;
+    const message = data.error?.message || data.error || text || `HTTP ${response.status}`;
     throw new Error(message);
   }
   return data;

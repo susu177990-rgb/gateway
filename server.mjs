@@ -2,10 +2,13 @@ import https from "node:https";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 const PORT = Number(process.env.PORT || 7443);
 const HTTP_PORT = Number(process.env.HTTP_PORT || 7080);
+const GATEWAY_API_KEY = (process.env.GATEWAY_API_KEY || "").trim();
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
@@ -14,6 +17,7 @@ const CERT = process.env.TLS_CERT || new URL("./certs/localhost.crt", import.met
 const KEY = process.env.TLS_KEY || new URL("./certs/localhost.key", import.meta.url);
 const CONFIG_FILE = new URL("./models.json", import.meta.url);
 const STATIC_DIR = new URL("./public/", import.meta.url);
+const HERMES_SYNC_SCRIPT = fileURLToPath(new URL("./scripts/sync-hermes-models.mjs", import.meta.url));
 
 const server = https.createServer(
   {
@@ -42,6 +46,7 @@ const httpServer = http.createServer(async (req, res) => {
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Gateway listening on ${PUBLIC_BASE}`);
   console.log(`Default model: ${DEFAULT_MODEL}`);
+  if (GATEWAY_API_KEY) console.log("Gateway client API key auth enabled (GATEWAY_API_KEY)");
 });
 
 httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
@@ -51,6 +56,16 @@ httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
 async function route(req, res, base = PUBLIC_BASE) {
   const url = new URL(req.url || "/", base);
   console.log(`${new Date().toISOString()} ${req.method} ${url.pathname}`);
+
+  const publicStatic =
+    req.method === "GET" && ["/", "/app.js", "/styles.css"].includes(url.pathname);
+  if (GATEWAY_API_KEY && !publicStatic && !clientGatewayAuthOk(req)) {
+    return sendJson(res, 401, {
+      type: "error",
+      error: { type: "authentication_error", message: "Invalid or missing gateway API key" },
+    });
+  }
+
   if (req.method === "GET" && url.pathname === "/") {
     return serveFile(res, new URL("./index.html", STATIC_DIR), "text/html; charset=utf-8");
   }
@@ -69,7 +84,16 @@ async function route(req, res, base = PUBLIC_BASE) {
       ok: true,
       providerCount: config.routes.filter((route) => route.enabled !== false).length,
       defaultModel: getDefaultModel(config),
-      entrypoints: ["Anthropic /v1/messages", "OpenAI /v1/chat/completions"],
+      entrypoints: [
+        "OpenAI Chat Completions POST /v1/chat/completions",
+        "OpenAI alias POST /v1",
+        "Optional alias POST /v1/unified/chat",
+        "Anthropic POST /v1/messages",
+      ],
+      gatewayClientAuth: {
+        required: Boolean(GATEWAY_API_KEY),
+        accepts: ["Authorization: Bearer <GATEWAY_API_KEY>", "x-api-key: <GATEWAY_API_KEY>"],
+      },
       models: listConfiguredModels(config),
     });
   }
@@ -97,7 +121,10 @@ async function route(req, res, base = PUBLIC_BASE) {
     return handleMessages(body, res);
   }
 
-  if (req.method === "POST" && (url.pathname === "/v1" || url.pathname === "/v1/chat/completions")) {
+  if (
+    req.method === "POST" &&
+    (url.pathname === "/v1" || url.pathname === "/v1/chat/completions" || url.pathname === "/v1/unified/chat")
+  ) {
     const body = await readJson(req);
     return handleChatCompletions(body, res);
   }
@@ -369,8 +396,8 @@ function asArray(value) {
 }
 
 function normalizeModel(model, config = readGatewayConfig(), route = resolveRoute(config, model)) {
-  if (!model) return route.defaultModel || getDefaultModel(config);
-  if (/^claude-|^(haiku|sonnet|opus)$/i.test(model)) return route.defaultModel || getDefaultModel(config);
+  if (!model) return getDefaultModel(config);
+  if (/^claude-|^(haiku|sonnet|opus)$/i.test(model)) return getDefaultModel(config);
   return model;
 }
 
@@ -600,6 +627,26 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function presentedGatewayKey(req) {
+  const raw = req.headers.authorization;
+  const m = typeof raw === "string" ? /^Bearer\s+(\S+)/i.exec(raw) : null;
+  if (m) return m[1].trim();
+  const x = req.headers["x-api-key"];
+  if (typeof x === "string" && x.trim()) return x.trim();
+  return "";
+}
+
+function clientGatewayAuthOk(req) {
+  const presented = presentedGatewayKey(req);
+  try {
+    const a = Buffer.from(presented, "utf8");
+    const b = Buffer.from(GATEWAY_API_KEY, "utf8");
+    return a.length === b.length && timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
 async function readJson(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -710,6 +757,32 @@ function readGatewayConfig() {
   return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
 }
 
+function scheduleHermesSync() {
+  if (process.env.HERMES_AUTO_SYNC === "0") return;
+  if (!fs.existsSync(HERMES_SYNC_SCRIPT)) {
+    console.warn(`Hermes sync skipped: missing ${HERMES_SYNC_SCRIPT}`);
+    return;
+  }
+  const base = `http://127.0.0.1:${HTTP_PORT}/v1`;
+  const child = spawn(process.execPath, [HERMES_SYNC_SCRIPT], {
+    env: {
+      ...process.env,
+      GATEWAY_MODELS_URL: `${base}/models`,
+      HERMES_GATEWAY_BASE: base,
+      GATEWAY_API_KEY,
+    },
+    stdio: "ignore",
+    detached: true,
+  });
+  child.unref();
+  child.on("error", (err) => console.error("[hermes-sync]", err.message));
+  child.on("exit", (code, signal) => {
+    if (code !== 0 && code !== null) {
+      console.error(`[hermes-sync] exited ${code}${signal ? ` (${signal})` : ""}`);
+    }
+  });
+}
+
 function writeGatewayConfig(input) {
   const current = readGatewayConfig();
   const used = new Set();
@@ -725,10 +798,14 @@ function writeGatewayConfig(input) {
     return normalizeRoute({ ...route, id, apiKey });
   });
 
+  const mergedRoutes = routes.length ? routes : defaultConfig().routes;
+  const requestedDefault = String(input.defaultModel ?? current.defaultModel ?? "").trim();
   const next = {
-    routes: routes.length ? routes : defaultConfig().routes,
+    defaultModel: requestedDefault || inferGatewayDefaultModel(mergedRoutes),
+    routes: mergedRoutes,
   };
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + "\n");
+  scheduleHermesSync();
   return next;
 }
 
@@ -738,9 +815,14 @@ function ensureConfigFile() {
   }
 }
 
+function inferGatewayDefaultModel(routes) {
+  const enabled = (routes || []).filter((route) => route.enabled !== false);
+  const route = enabled[0] || routes?.[0];
+  return route?.defaultModel || route?.models?.[0] || DEFAULT_MODEL;
+}
+
 function defaultConfig() {
-  return {
-    routes: [
+  const routes = [
       normalizeRoute({
         id: "nvidia",
         name: "NVIDIA NIM",
@@ -759,7 +841,10 @@ function defaultConfig() {
           "qwen/qwen3-next-80b-a3b-instruct",
         ],
       }),
-    ],
+  ];
+  return {
+    defaultModel: inferGatewayDefaultModel(routes),
+    routes,
   };
 }
 
@@ -787,6 +872,7 @@ function normalizeModelList(models) {
 
 function redactConfig(config) {
   return {
+    defaultModel: String(config.defaultModel || "").trim(),
     routes: config.routes.map((route) => ({
       ...route,
       apiKey: resolveRouteApiKey(route),
@@ -816,8 +902,9 @@ function toUpstreamModel(model, route) {
 }
 
 function getDefaultModel(config) {
-  const route = config.routes.find((item) => item.enabled !== false) || config.routes[0] || defaultConfig().routes[0];
-  return route.defaultModel || route.models?.[0] || DEFAULT_MODEL;
+  const stored = String(config.defaultModel || "").trim();
+  if (stored) return stored;
+  return inferGatewayDefaultModel(config.routes);
 }
 
 function listConfiguredModels(config) {
