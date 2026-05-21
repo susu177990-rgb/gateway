@@ -777,7 +777,13 @@ function readLocalNvidiaProfile() {
 
 async function handleAdminTest(body, res) {
   const config = readGatewayConfig();
-  const route = config.routes.find((item) => item.id === body.routeId) || resolveRoute(config, body.model);
+  const saved =
+    config.routes.find((item) => item.id === body.routeId) || resolveRoute(config, body.model);
+  const route = {
+    ...saved,
+    ...(body.baseUrl?.trim() ? { baseUrl: body.baseUrl.trim() } : {}),
+    ...(body.apiKey?.trim() ? { apiKey: body.apiKey.trim() } : {}),
+  };
   const model = body.model || route.defaultModel || route.models?.[0];
   if (!model) {
     return sendJson(res, 400, { ok: false, error: "No model selected" });
@@ -786,6 +792,12 @@ async function handleAdminTest(body, res) {
   const apiKey = resolveRouteApiKey(route);
   if (!apiKey) {
     return sendJson(res, 400, { ok: false, error: `No API key configured for ${route.name || route.id}` });
+  }
+  if (/^replace-with/i.test(apiKey) || apiKey === "not-required-for-local-only") {
+    return sendJson(res, 400, {
+      ok: false,
+      error: `上游「${route.name}」仍是模板占位密钥，请粘贴真实 API Key 后再测试。`,
+    });
   }
 
   const startedAt = Date.now();
@@ -819,7 +831,12 @@ async function handleAdminTest(body, res) {
         });
   const text = await upstream.text();
   if (!upstream.ok) {
-    return sendJson(res, upstream.status, { ok: false, status: upstream.status, error: text.slice(0, 1000) });
+    return sendJson(res, upstream.status, {
+      ok: false,
+      status: upstream.status,
+      error: formatAdminTestError(route, upstream.status, text),
+      detail: text.slice(0, 1000),
+    });
   }
   let parsed;
   try {
@@ -838,6 +855,17 @@ async function handleAdminTest(body, res) {
       "",
     usage: parsed.usage,
   });
+}
+
+function formatAdminTestError(route, status, text) {
+  const envHint = ROUTE_ENV_KEYS[route.id] ? `，或在 Zeabur 设置环境变量 ${ROUTE_ENV_KEYS[route.id]}` : "";
+  if (
+    status === 401 ||
+    /Authentication failed|Unauthorized|API_KEY_INVALID|API key not valid|replace-with/i.test(text)
+  ) {
+    return `上游「${route.name}」API Key 无效或未配置（HTTP ${status}）${envHint}。请在该渠道填入 NVIDIA / Google 等平台颁发的真实密钥（不是页面上的 Gateway 统一 Key）。`;
+  }
+  return text.slice(0, 500);
 }
 
 function readGatewayConfig() {

@@ -107,6 +107,19 @@ function scheduleAutosave() {
   }, AUTOSAVE_MS);
 }
 
+function syncAllRoutesFromDom() {
+  routesEl.querySelectorAll(".card").forEach((card, index) => {
+    const route = routes[index];
+    if (!route) return;
+    const nameInput = card.querySelector('[data-field="name"]');
+    const baseUrlInput = card.querySelector('[data-field="baseUrl"]');
+    const apiKeyInput = card.querySelector('[data-field="apiKey"]');
+    if (nameInput) route.name = nameInput.value;
+    if (baseUrlInput) route.baseUrl = baseUrlInput.value;
+    if (apiKeyInput) route.apiKey = apiKeyInput.value;
+  });
+}
+
 async function flushAutosave() {
   if (hydrating) return;
   if (saveInFlight) {
@@ -114,6 +127,7 @@ async function flushAutosave() {
     return;
   }
 
+  syncAllRoutesFromDom();
   saveInFlight = true;
   pendingSave = false;
   setSaveState("saving");
@@ -444,19 +458,22 @@ function bindRoute(node, route, index) {
     testBtn.disabled = true;
 
     try {
-      validateRouteForTest(route);
-      await flushAutosave();
+      syncAllRoutesFromDom();
       const current = routes[index] || route;
+      validateRouteForTest(current);
       const result = await fetchJson("/admin/test", {
         method: "POST",
         body: JSON.stringify({
           routeId: current.id,
           model: current.defaultModel || String(current.models?.[0] || "").trim(),
+          baseUrl: (current.baseUrl || "").trim(),
+          apiKey: (current.apiKey || "").trim(),
         }),
       });
 
       if (result.ok) {
-        testState.textContent = `✓ 成功 · ${result.latencyMs}ms · ${result.reply || "已响应"}`;
+        await flushAutosave();
+        testState.textContent = `✓ 成功 · ${result.latencyMs}ms · ${result.reply || "已响应"} · 已保存`;
         testState.className = "card-message ok";
       } else {
         testState.textContent = `✗ ${result.error || "失败"}`;
