@@ -6,6 +6,30 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
+function loadEnvFile(filename) {
+  const path = fileURLToPath(new URL(filename, import.meta.url));
+  if (!fs.existsSync(path)) return;
+  for (const line of fs.readFileSync(path, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    if (key in process.env) continue;
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+loadEnvFile(".env.local");
+loadEnvFile(".env");
+
 const GATEWAY_API_KEY = (process.env.GATEWAY_API_KEY || "").trim();
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
