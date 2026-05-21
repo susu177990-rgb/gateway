@@ -586,9 +586,12 @@ body::before {
 .model-test-state {
   flex-shrink: 0;
   min-width: 4.5em;
+  min-height: 26px;
+  padding: 0 4px;
   font-size: 10px;
+  line-height: 26px;
   text-align: right;
-  color: var(--text-3);
+  color: var(--text-2);
   white-space: nowrap;
 }
 

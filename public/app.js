@@ -424,7 +424,7 @@ function bindRoute(node, route, index) {
 
   route.type = "openai-chat";
   normalizeRouteModels(route);
-  bindModels(node, route, onFieldEdit);
+  bindModels(node, route, index, onFieldEdit);
 
   node.querySelector('[data-action="edit"]').addEventListener("click", () => {
     setRouteEditing(route, index, true);
@@ -475,9 +475,23 @@ function normalizeRouteModels(route) {
   syncDefaultModel(route);
 }
 
-function bindModels(node, route, onEdit) {
+function bindModels(node, route, routeIndex, onEdit) {
   const list = node.querySelector('[data-role="models"]');
   const addModelBtn = node.querySelector('[data-action="add-model"]');
+
+  if (!list.dataset.testBound) {
+    list.dataset.testBound = "1";
+    list.addEventListener("click", async (event) => {
+      const testBtn = event.target.closest('[data-action="test-model"]');
+      if (!testBtn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const row = testBtn.closest(".model-cell");
+      const input = row?.querySelector('[data-role="model-name"]');
+      if (!input) return;
+      await runChannelModelTest(route, routeIndex, input.value, testBtn, row.querySelector('[data-role="modelTestState"]'));
+    });
+  }
 
   const draw = () => {
     list.innerHTML = "";
@@ -511,14 +525,6 @@ function bindModels(node, route, onEdit) {
         onEdit();
       });
 
-      const testBtn = row.querySelector('[data-action="test-model"]');
-      const testState = row.querySelector('[data-role="modelTestState"]');
-      testBtn.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        await runChannelModelTest(route, index, input.value, testBtn, testState);
-      });
-
       list.appendChild(row);
     });
   };
@@ -542,30 +548,43 @@ function validateRouteForTest(route, modelId) {
   if (!String(modelId || "").trim()) throw new Error("请先填写模型 ID");
 }
 
+async function postAdminTest(body) {
+  const response = await fetch("/admin/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : { ok: false, error: `HTTP ${response.status}` };
+  } catch {
+    return { ok: false, error: text || `HTTP ${response.status}` };
+  }
+}
+
 async function runChannelModelTest(route, index, modelId, testBtn, stateEl) {
   const setState = (text, kind = "") => {
     if (!stateEl) return;
     stateEl.textContent = text;
     stateEl.className = `model-test-state${kind ? ` ${kind}` : ""}`;
-    stateEl.removeAttribute("title");
+    if (!text) stateEl.removeAttribute("title");
   };
 
+  const prevLabel = testBtn.textContent;
   setState("…");
   testBtn.disabled = true;
+  testBtn.textContent = "测试中";
 
   try {
     syncAllRoutesFromDom();
     const current = routes[index] || route;
     const model = String(modelId || "").trim();
     validateRouteForTest(current, model);
-    const result = await fetchJson("/admin/test", {
-      method: "POST",
-      body: JSON.stringify({
-        routeId: current.id,
-        model,
-        baseUrl: (current.baseUrl || "").trim(),
-        apiKey: (current.apiKey || "").trim(),
-      }),
+    const result = await postAdminTest({
+      routeId: current.id,
+      model,
+      baseUrl: (current.baseUrl || "").trim(),
+      apiKey: (current.apiKey || "").trim(),
     });
 
     if (result.ok) {
@@ -574,13 +593,14 @@ async function runChannelModelTest(route, index, modelId, testBtn, stateEl) {
       if (stateEl) stateEl.title = result.reply || "已响应";
     } else {
       setState("✗", "error");
-      if (stateEl) stateEl.title = result.error || "失败";
+      if (stateEl) stateEl.title = result.error || result.detail || "失败";
     }
   } catch (err) {
     setState("✗", "error");
     if (stateEl) stateEl.title = err.message || String(err);
   } finally {
     testBtn.disabled = false;
+    testBtn.textContent = prevLabel;
   }
 }
 
