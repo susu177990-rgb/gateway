@@ -7,8 +7,7 @@ const entryList = document.querySelector("#entryList");
 const gatewayClientKey = document.querySelector("#gatewayClientKey");
 const gatewayDefaultModelEl = document.querySelector("#gatewayDefaultModel");
 
-const GATEWAY_KEY_STORAGE = "gateway.clientApiKey";
-const GATEWAY_CLIENT_KEY_DEFAULT = "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b";
+const GATEWAY_CLIENT_KEY = "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b";
 const AUTOSAVE_MS = 600;
 function gatewayOrigin() {
   const { protocol, hostname, port } = window.location;
@@ -140,26 +139,23 @@ entryList?.addEventListener("click", async (event) => {
   }
 });
 
-gatewayClientKey?.addEventListener("input", () => {
-  const value = gatewayClientKey.value.trim();
-  if (value) localStorage.setItem(GATEWAY_KEY_STORAGE, value);
-  else localStorage.removeItem(GATEWAY_KEY_STORAGE);
-});
-
-gatewayClientKey?.addEventListener("change", () => {
-  if (gatewayClientKey.value.trim()) load();
-});
-
-gatewayClientKey?.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && gatewayClientKey.value.trim()) load();
-});
-
 if (gatewayClientKey) {
-  const serverKey = String(window.__GATEWAY_CLIENT_KEY__ || "").trim();
-  const storedKey = localStorage.getItem(GATEWAY_KEY_STORAGE) || "";
-  gatewayClientKey.value = serverKey || storedKey || GATEWAY_CLIENT_KEY_DEFAULT;
-  localStorage.setItem(GATEWAY_KEY_STORAGE, gatewayClientKey.value);
+  gatewayClientKey.textContent = GATEWAY_CLIENT_KEY;
 }
+
+document.querySelector("[data-copy-key]")?.addEventListener("click", async (event) => {
+  const el = event.currentTarget;
+  try {
+    await navigator.clipboard.writeText(GATEWAY_CLIENT_KEY);
+    const prev = el.textContent;
+    el.textContent = "已复制";
+    setTimeout(() => {
+      el.textContent = prev;
+    }, 1200);
+  } catch {
+    window.prompt("复制以下密钥：", GATEWAY_CLIENT_KEY);
+  }
+});
 
 gatewayDefaultModelEl?.addEventListener("change", () => {
   gatewayDefaultModel = gatewayDefaultModelEl.value;
@@ -561,9 +557,8 @@ async function persist() {
 }
 
 function authHeaders() {
-  const key = (gatewayClientKey?.value || localStorage.getItem(GATEWAY_KEY_STORAGE) || "").trim();
-  if (!key) return {};
-  return { Authorization: `Bearer ${key}` };
+  if (!GATEWAY_CLIENT_KEY) return {};
+  return { Authorization: `Bearer ${GATEWAY_CLIENT_KEY}` };
 }
 
 async function fetchJson(url, options = {}) {

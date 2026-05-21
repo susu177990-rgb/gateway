@@ -55,14 +55,11 @@
 
           <div class="connect-settings">
             <div class="connect-key">
-              <label class="field-label" for="gatewayClientKey">统一 API Key</label>
-              <input
-                id="gatewayClientKey"
-                class="input input-fluid"
-                type="text"
-                value="sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b"
-                autocomplete="off"
-              />
+              <p class="field-label">统一 API Key</p>
+              <div class="gateway-key-row">
+                <code id="gatewayClientKey" class="mono gateway-key-text"></code>
+                <button type="button" class="btn btn-ghost btn-xs" data-copy-key>复制</button>
+              </div>
             </div>
 
             <div class="connect-default">
@@ -159,6 +156,6 @@
     </div>
   </template>
 
-  <script src="/app.js?v=20"></script>
+  <script src="/app.js?v=21"></script>
 </body>
 </html>
