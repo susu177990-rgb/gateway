@@ -6,52 +6,80 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
-const PORT = Number(process.env.PORT || 7443);
-const HTTP_PORT = Number(process.env.HTTP_PORT || 7080);
 const GATEWAY_API_KEY = (process.env.GATEWAY_API_KEY || "").trim();
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
-const PUBLIC_BASE = process.env.PUBLIC_BASE || `https://127.0.0.1:${PORT}`;
 const CERT = process.env.TLS_CERT || new URL("./certs/localhost.crt", import.meta.url);
 const KEY = process.env.TLS_KEY || new URL("./certs/localhost.key", import.meta.url);
 const CONFIG_FILE = new URL("./models.json", import.meta.url);
 const STATIC_DIR = new URL("./public/", import.meta.url);
 const HERMES_SYNC_SCRIPT = fileURLToPath(new URL("./scripts/sync-hermes-models.mjs", import.meta.url));
 
-const server = https.createServer(
-  {
-    cert: fs.readFileSync(CERT),
-    key: fs.readFileSync(KEY),
-  },
-  async (req, res) => {
-    try {
-      await route(req, res);
-    } catch (err) {
-      console.error(err);
-      sendJson(res, 500, { type: "error", error: { type: "internal_error", message: String(err?.message || err) } });
-    }
-  },
-);
+const HTTP_ONLY =
+  process.env.GATEWAY_HTTP_ONLY === "1" || process.env.ZEABUR === "1" || !tlsCertsExist();
+const BIND_HOST = process.env.BIND_HOST || (HTTP_ONLY ? "0.0.0.0" : "127.0.0.1");
+const HTTPS_PORT = Number(process.env.HTTPS_PORT || 7443);
+const HTTP_PORT = Number(process.env.HTTP_PORT || 7080);
+const LISTEN_PORT = HTTP_ONLY ? Number(process.env.PORT || 8080) : HTTP_PORT;
+const PUBLIC_BASE =
+  (process.env.PUBLIC_BASE || "").trim() ||
+  (HTTP_ONLY ? `http://127.0.0.1:${LISTEN_PORT}` : `https://127.0.0.1:${HTTPS_PORT}`);
 
-const httpServer = http.createServer(async (req, res) => {
+function tlsCertsExist() {
   try {
-    await route(req, res, `http://127.0.0.1:${HTTP_PORT}`);
+    fs.accessSync(fileURLToPath(CERT), fs.constants.R_OK);
+    fs.accessSync(fileURLToPath(KEY), fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function handleRequest(req, res, base = PUBLIC_BASE) {
+  try {
+    await route(req, res, base);
   } catch (err) {
     console.error(err);
     sendJson(res, 500, { type: "error", error: { type: "internal_error", message: String(err?.message || err) } });
   }
+}
+
+const httpServer = http.createServer((req, res) => {
+  const base = HTTP_ONLY ? PUBLIC_BASE : `http://127.0.0.1:${LISTEN_PORT}`;
+  return handleRequest(req, res, base);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`Gateway listening on ${PUBLIC_BASE}`);
+function logStartup() {
+  console.log(`Gateway mode: ${HTTP_ONLY ? "HTTP (cloud)" : "HTTPS + HTTP (local)"}`);
   console.log(`Default model: ${DEFAULT_MODEL}`);
   if (GATEWAY_API_KEY) console.log("Gateway client API key auth enabled (GATEWAY_API_KEY)");
-});
+}
 
-httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
-  console.log(`Gateway HTTP listening on http://127.0.0.1:${HTTP_PORT}`);
-});
+if (HTTP_ONLY) {
+  httpServer.listen(LISTEN_PORT, BIND_HOST, () => {
+    console.log(`Gateway HTTP listening on http://${BIND_HOST}:${LISTEN_PORT}`);
+    console.log(`Public base (for logs): ${PUBLIC_BASE}`);
+    logStartup();
+  });
+} else {
+  const server = https.createServer(
+    {
+      cert: fs.readFileSync(CERT),
+      key: fs.readFileSync(KEY),
+    },
+    (req, res) => handleRequest(req, res),
+  );
+
+  server.listen(HTTPS_PORT, BIND_HOST, () => {
+    console.log(`Gateway HTTPS listening on https://${BIND_HOST}:${HTTPS_PORT}`);
+    logStartup();
+  });
+
+  httpServer.listen(HTTP_PORT, BIND_HOST, () => {
+    console.log(`Gateway HTTP listening on http://${BIND_HOST}:${HTTP_PORT}`);
+  });
+}
 
 async function route(req, res, base = PUBLIC_BASE) {
   const url = new URL(req.url || "/", base);
@@ -82,6 +110,9 @@ async function route(req, res, base = PUBLIC_BASE) {
     const config = readGatewayConfig();
     return sendJson(res, 200, {
       ok: true,
+      mode: HTTP_ONLY ? "http" : "local",
+      listen: { host: BIND_HOST, port: HTTP_ONLY ? LISTEN_PORT : HTTP_PORT, httpOnly: HTTP_ONLY },
+      publicBase: PUBLIC_BASE,
       providerCount: config.routes.filter((route) => route.enabled !== false).length,
       defaultModel: getDefaultModel(config),
       entrypoints: [
@@ -758,12 +789,12 @@ function readGatewayConfig() {
 }
 
 function scheduleHermesSync() {
-  if (process.env.HERMES_AUTO_SYNC === "0") return;
+  if (HTTP_ONLY || process.env.HERMES_AUTO_SYNC === "0") return;
   if (!fs.existsSync(HERMES_SYNC_SCRIPT)) {
     console.warn(`Hermes sync skipped: missing ${HERMES_SYNC_SCRIPT}`);
     return;
   }
-  const base = `http://127.0.0.1:${HTTP_PORT}/v1`;
+  const base = `http://127.0.0.1:${LISTEN_PORT}/v1`;
   const child = spawn(process.execPath, [HERMES_SYNC_SCRIPT], {
     env: {
       ...process.env,

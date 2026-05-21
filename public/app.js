@@ -9,10 +9,19 @@ const gatewayDefaultModelEl = document.querySelector("#gatewayDefaultModel");
 
 const GATEWAY_KEY_STORAGE = "gateway.clientApiKey";
 const AUTOSAVE_MS = 600;
-const gatewayOrigin = `${window.location.protocol}//${window.location.hostname}:${window.location.port || "7080"}`;
+function gatewayOrigin() {
+  const { protocol, hostname, port } = window.location;
+  if (!port || port === "443" || port === "80") return `${protocol}//${hostname}`;
+  return `${protocol}//${hostname}:${port}`;
+}
+
 const ENTRY_URLS = {
-  anthropic: `${gatewayOrigin}/v1/messages`,
-  openai: `${gatewayOrigin}/v1/chat/completions`,
+  get anthropic() {
+    return `${gatewayOrigin()}/v1/messages`;
+  },
+  get openai() {
+    return `${gatewayOrigin()}/v1/chat/completions`;
+  },
 };
 
 let routes = [];
@@ -314,6 +323,8 @@ async function load() {
 }
 
 function renderEntryUrls() {
+  const origin = gatewayOrigin();
+  document.querySelector("#gatewayListenAddr")?.replaceChildren(document.createTextNode(origin));
   entryList?.querySelectorAll(".entry-url[data-entry]").forEach((el) => {
     const key = el.dataset.entry;
     el.textContent = ENTRY_URLS[key] || "";

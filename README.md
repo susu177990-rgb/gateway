@@ -180,9 +180,32 @@ gateway.err.log
 
 These logs are ignored by Git.
 
+## Deploy on Zeabur（公网）
+
+Zeabur 会注入 `PORT`；容器内没有本地 TLS 证书时，Gateway 自动以 **HTTP、监听 `0.0.0.0`** 启动（无需改代码里的路径）。
+
+在 Zeabur 服务 **环境变量** 中建议设置：
+
+| 变量 | 示例 | 说明 |
+|------|------|------|
+| `PUBLIC_BASE` | `https://bahadir-api.zeabur.app` | 日志与文档用，可选 |
+| `GATEWAY_API_KEY` | 长随机字符串 | **强烈建议**，防止公网被滥用 |
+| `NVIDIA_API_KEY` | 你的上游 Key | 首次启动默认 NVIDIA 渠道会用 |
+| `GATEWAY_HTTP_ONLY` | `1` | 可选；无证书时也会自动开启 |
+
+启动命令保持 `npm start` 即可。重新部署后，用浏览器打开你的域名，在管理页配置渠道；`models.json` 在容器重启后会丢失，除非在 Zeabur 挂载持久化卷到项目目录。
+
+给其它 AI 应用填写：
+
+- **Base URL**：`https://你的域名.zeabur.app/v1`
+- **API Key**：`GATEWAY_API_KEY`（若已设置）
+- **模型名**：与管理页里一致
+
+连接入口路径与本地相同，例如 `POST /v1/chat/completions`、`GET /v1/models`。
+
 ## Security Notes
 
 - Do not commit `models.json`; it can contain provider API keys.
 - Do not commit `certs/localhost.key`.
-- Keep the service bound to `127.0.0.1` unless you intentionally want network exposure.
+- Local dev binds to `127.0.0.1`; cloud deploy (no TLS certs) binds to `0.0.0.0` — use `GATEWAY_API_KEY` on the public internet.
 - Review upstream URLs carefully because the gateway forwards requests to the configured URL exactly.
