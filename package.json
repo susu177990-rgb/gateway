@@ -8,6 +8,8 @@
   },
   "scripts": {
     "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check server.mjs && node --check public/app.js && npm test",
     "sync:hermes": "node scripts/sync-hermes-models.mjs"
   }
 }

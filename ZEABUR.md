@@ -40,15 +40,29 @@ https://你的域名/health
 
 若 `configFile` 为 `/data/models.json`，且你在网页保存后再次 Redeploy，渠道 Key 仍在，说明卷已生效。
 
-## 网页对话项目（tools 报错）
+## 网页对话项目（tools / 函数调用）
 
-若报 `tools ... name Field required`，说明对话网页发了空的「函数/工具」占位符。  
-Gateway **默认会丢掉 tools** 再转发（普通聊天不受影响）。
+Gateway **默认会转发合法的 tools**（每个工具必须有 `function.name`），并自动去掉没有名称的空占位符。
 
-只有真要函数调用时，在环境变量加：
+默认会**去掉没有 name 的空占位符**并继续聊天；只有配置了 `GATEWAY_STRICT_TOOLS=1` 才会直接 400。
+
+若 Zeabur 日志里出现 `dropped N tool(s) without function.name`，说明对话网页发了空工具壳，需要在**对话项目里给每个工具填好名称**，格式示例：
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "search_web",
+    "description": "搜索网页",
+    "parameters": { "type": "object", "properties": { "q": { "type": "string" } } }
+  }
+}
+```
+
+仅当旧客户端无法改、又只想先能聊天时，可临时加（会**完全禁用** tools）：
 
 ```env
-GATEWAY_FORWARD_TOOLS=1
+GATEWAY_STRIP_TOOLS=1
 ```
 
 ## 浏览器项目接 API（CORS）

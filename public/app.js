@@ -7,7 +7,8 @@ const entryList = document.querySelector("#entryList");
 const gatewayClientKey = document.querySelector("#gatewayClientKey");
 const gatewayDefaultModelEl = document.querySelector("#gatewayDefaultModel");
 
-const GATEWAY_CLIENT_KEY = "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b";
+const GATEWAY_CLIENT_KEY =
+  window.__GATEWAY_CLIENT_KEY__ || "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b";
 const AUTOSAVE_MS = 600;
 let gatewayPublicOrigin = "";
 
@@ -231,6 +232,7 @@ function refreshGatewayModelSelect() {
   }
 
   gatewayDefaultModelEl.value = current && ids.includes(current) ? current : "";
+  gatewayDefaultModel = gatewayDefaultModelEl.value;
 }
 
 function routeKey(route, index) {
@@ -359,7 +361,12 @@ async function load() {
   renderEntryUrls();
   const authHint = health.gatewayClientAuth?.required ? " · 网关鉴权已开启" : "";
   const hostHint = gatewayPublicOrigin ? ` · ${gatewayPublicOrigin}` : "";
-  setBaseStatus(`运行中 · 共 ${routes.length} 个渠道 · 默认：${health.defaultModel || "-"}${hostHint}${authHint}`);
+  const runtimeLabel = health.runtimeMode === "cloud" ? "云端" : "本地";
+  const storageLabel = health.configPersistent ? "持久化" : "本地文件";
+  const configLabel = health.configFileLabel ? ` · 配置：${health.configFileLabel}` : "";
+  setBaseStatus(
+    `运行中 · ${runtimeLabel}/${storageLabel} · 共 ${routes.length} 个渠道 · 默认：${health.defaultModel || "-"}${hostHint}${configLabel}${authHint}`,
+  );
   hydrating = false;
   render();
 }
@@ -608,6 +615,15 @@ async function runChannelModelTest(route, index, modelId, testBtn, stateEl) {
 }
 
 function buildPersistPayload() {
+  const invalidRoute = routes.find((route) => {
+    if (route.enabled === false) return false;
+    const models = (route.models || []).map((m) => String(m).trim()).filter(Boolean);
+    return models.length === 0;
+  });
+  if (invalidRoute) {
+    throw new Error(`渠道「${invalidRoute.name || "未命名"}」没有可用模型，请至少填写一个模型 ID。`);
+  }
+
   return {
     defaultModel: (gatewayDefaultModelEl?.value || gatewayDefaultModel || "").trim(),
     routes: routes.map((route) => {

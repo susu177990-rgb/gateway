@@ -7,6 +7,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
+const envFileSources = new Map();
+
 function loadEnvFile(filename) {
   const path = fileURLToPath(new URL(filename, import.meta.url));
   if (!fs.existsSync(path)) return;
@@ -25,6 +27,7 @@ function loadEnvFile(filename) {
       value = value.slice(1, -1);
     }
     process.env[key] = value;
+    envFileSources.set(key, filename);
   }
 }
 
@@ -35,7 +38,10 @@ const GATEWAY_API_KEY = (
   process.env.GATEWAY_API_KEY || "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b"
 ).trim();
 const CORS_ORIGIN = (process.env.CORS_ORIGIN || "*").trim() || "*";
-const FORWARD_TOOLS = process.env.GATEWAY_FORWARD_TOOLS === "1";
+/** Set GATEWAY_STRIP_TOOLS=1 to drop all tools (legacy workaround for broken clients). */
+const STRIP_TOOLS = process.env.GATEWAY_STRIP_TOOLS === "1";
+/** Set GATEWAY_STRICT_TOOLS=1 to reject chat when every tool lacks function.name. */
+const STRICT_TOOLS = process.env.GATEWAY_STRICT_TOOLS === "1";
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
@@ -46,12 +52,28 @@ const HERMES_SYNC_SCRIPT = fileURLToPath(new URL("./scripts/sync-hermes-models.m
 const LEGACY_CONFIG_FILE = fileURLToPath(new URL("./models.json", import.meta.url));
 const EXAMPLE_CONFIG_FILE = fileURLToPath(new URL("./models.example.json", import.meta.url));
 
+function envWasLoadedFromLocalFile(key) {
+  return envFileSources.get(key) === ".env.local";
+}
+
+function envFlagEnabled(key) {
+  return process.env[key] === "1" && !envWasLoadedFromLocalFile(key);
+}
+
+function envValueForRuntime(key) {
+  return envWasLoadedFromLocalFile(key) ? "" : process.env[key];
+}
+
 const HTTP_ONLY =
-  process.env.GATEWAY_HTTP_ONLY === "1" ||
-  process.env.ZEABUR === "1" ||
-  process.env.NODE_ENV === "production" ||
+  envFlagEnabled("GATEWAY_HTTP_ONLY") ||
+  envFlagEnabled("ZEABUR") ||
+  envValueForRuntime("NODE_ENV") === "production" ||
   !tlsCertsExist();
-const GATEWAY_DATA_DIR = (process.env.GATEWAY_DATA_DIR || "/data").trim() || "/data";
+const CLOUD_CONFIG_MODE =
+  envFlagEnabled("GATEWAY_HTTP_ONLY") ||
+  envFlagEnabled("ZEABUR") ||
+  envValueForRuntime("NODE_ENV") === "production";
+const GATEWAY_DATA_DIR = (envValueForRuntime("GATEWAY_DATA_DIR") || "/data").trim() || "/data";
 const CONFIG_FILE = resolveModelsConfigPath();
 const BIND_HOST = process.env.BIND_HOST || (HTTP_ONLY ? "0.0.0.0" : "127.0.0.1");
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || 7443);
@@ -65,7 +87,7 @@ function resolveModelsConfigPath() {
   if (process.env.MODELS_CONFIG_PATH?.trim()) {
     return path.resolve(process.env.MODELS_CONFIG_PATH.trim());
   }
-  if (HTTP_ONLY) {
+  if (CLOUD_CONFIG_MODE) {
     return path.join(GATEWAY_DATA_DIR, "models.json");
   }
   return LEGACY_CONFIG_FILE;
@@ -86,7 +108,14 @@ async function handleRequest(req, res, base = PUBLIC_BASE) {
     await route(req, res, base);
   } catch (err) {
     console.error(err);
-    sendJson(res, 500, { type: "error", error: { type: "internal_error", message: String(err?.message || err) } });
+    const status = Number(err?.status || 500);
+    sendJson(res, status, {
+      type: "error",
+      error: {
+        type: err?.type || (status === 500 ? "internal_error" : "invalid_request_error"),
+        message: String(err?.message || err),
+      },
+    });
   }
 }
 
@@ -95,22 +124,37 @@ const httpServer = http.createServer((req, res) => {
   return handleRequest(req, res, base);
 });
 
+function configIsPersistent() {
+  if (process.env.MODELS_CONFIG_PATH?.trim()) return true;
+  return CLOUD_CONFIG_MODE && path.resolve(CONFIG_FILE).startsWith(path.resolve(GATEWAY_DATA_DIR));
+}
+
+function configPathLabel() {
+  const rel = path.relative(process.cwd(), CONFIG_FILE);
+  if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return rel;
+  return CONFIG_FILE;
+}
+
 function logStartup() {
   ensureConfigFile();
   console.log(`Gateway mode: ${HTTP_ONLY ? "HTTP (cloud)" : "HTTPS + HTTP (local)"}`);
   console.log(`Config file: ${CONFIG_FILE}`);
+  console.log(`Config persistent: ${configIsPersistent()}`);
   console.log(`Default model: ${DEFAULT_MODEL}`);
   if (GATEWAY_API_KEY) console.log("Gateway client API key auth enabled (GATEWAY_API_KEY)");
 }
 
-if (HTTP_ONLY) {
-  httpServer.listen(LISTEN_PORT, BIND_HOST, () => {
-    console.log(`Gateway HTTP listening on http://${BIND_HOST}:${LISTEN_PORT}`);
-    console.log(`Public base (for logs): ${PUBLIC_BASE}`);
-    logStartup();
-  });
-} else {
-  const server = https.createServer(
+function startGateway() {
+  if (HTTP_ONLY) {
+    httpServer.listen(LISTEN_PORT, BIND_HOST, () => {
+      console.log(`Gateway HTTP listening on http://${BIND_HOST}:${LISTEN_PORT}`);
+      console.log(`Public base (for logs): ${PUBLIC_BASE}`);
+      logStartup();
+    });
+    return { httpServer };
+  }
+
+  const httpsServer = https.createServer(
     {
       cert: fs.readFileSync(CERT),
       key: fs.readFileSync(KEY),
@@ -118,7 +162,7 @@ if (HTTP_ONLY) {
     (req, res) => handleRequest(req, res),
   );
 
-  server.listen(HTTPS_PORT, BIND_HOST, () => {
+  httpsServer.listen(HTTPS_PORT, BIND_HOST, () => {
     console.log(`Gateway HTTPS listening on https://${BIND_HOST}:${HTTPS_PORT}`);
     logStartup();
   });
@@ -126,6 +170,12 @@ if (HTTP_ONLY) {
   httpServer.listen(HTTP_PORT, BIND_HOST, () => {
     console.log(`Gateway HTTP listening on http://${BIND_HOST}:${HTTP_PORT}`);
   });
+
+  return { httpServer, httpsServer };
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  startGateway();
 }
 
 function applyCors(req, res) {
@@ -185,19 +235,27 @@ async function route(req, res, base = PUBLIC_BASE) {
 
   if (req.method === "GET" && url.pathname === "/health") {
     const config = readGatewayConfig();
+    const enabledRoutes = config.routes.filter((route) => route.enabled !== false);
     return sendJson(res, 200, {
       ok: true,
       mode: HTTP_ONLY ? "http" : "local",
+      runtimeMode: CLOUD_CONFIG_MODE ? "cloud" : "local",
       listen: { host: BIND_HOST, port: HTTP_ONLY ? LISTEN_PORT : HTTP_PORT, httpOnly: HTTP_ONLY },
       publicBase: PUBLIC_BASE,
       configFile: CONFIG_FILE,
-      configPersistent: HTTP_ONLY,
-      storageHint: HTTP_ONLY
+      configFileLabel: configPathLabel(),
+      configExists: fs.existsSync(CONFIG_FILE),
+      configPersistent: configIsPersistent(),
+      configSource: CLOUD_CONFIG_MODE ? "cloud-data-dir" : "project-models-json",
+      storageHint: CLOUD_CONFIG_MODE
         ? "Mount Zeabur volume at /data (see ZEABUR.md) so models.json survives redeploy."
         : null,
-      providerCount: config.routes.filter((route) => route.enabled !== false).length,
+      providerCount: enabledRoutes.length,
+      enabledProviderCount: enabledRoutes.length,
+      routeCount: config.routes.length,
       defaultModel: getDefaultModel(config),
-      forwardTools: FORWARD_TOOLS,
+      forwardTools: !STRIP_TOOLS,
+      toolsMode: STRIP_TOOLS ? "strip" : STRICT_TOOLS ? "strict" : "sanitize",
       entrypoints: [
         "OpenAI Chat Completions POST /v1/chat/completions",
         "OpenAI alias POST /v1",
@@ -263,8 +321,9 @@ async function handleModels(res) {
 
 async function handleMessages(body, res) {
   const config = readGatewayConfig();
-  const route = resolveRoute(config, body.model);
-  const model = normalizeModel(body.model, config, route);
+  const resolved = resolveModelRoute(config, body.model);
+  if (resolved.error) return sendJson(res, resolved.status, resolved.error);
+  const { route, model } = resolved;
   const upstreamModel = toUpstreamModel(model, route);
   const apiKey = resolveRouteApiKey(route);
   if (!apiKey) {
@@ -333,8 +392,9 @@ async function handleMessages(body, res) {
 
 async function handleChatCompletions(body, res) {
   const config = readGatewayConfig();
-  const route = resolveRoute(config, body.model);
-  const model = normalizeModel(body.model, config, route);
+  const resolved = resolveModelRoute(config, body.model);
+  if (resolved.error) return sendJson(res, resolved.status, resolved.error);
+  const { route, model } = resolved;
   const upstreamModel = toUpstreamModel(model, route);
   const apiKey = resolveRouteApiKey(route);
   if (!apiKey) {
@@ -344,6 +404,11 @@ async function handleChatCompletions(body, res) {
   }
 
   if (route.type === "openai-chat") {
+    const toolError = validateIncomingTools(body?.tools);
+    if (toolError) {
+      return sendJson(res, 400, { error: toolError });
+    }
+    warnDroppedTools(body?.tools);
     const upstreamBody = sanitizeOpenAiChatBody(body, upstreamModel);
     return fetchOpenAiChat(route, apiKey, upstreamBody, res);
   }
@@ -367,10 +432,9 @@ async function handleChatCompletions(body, res) {
 }
 
 function sanitizeOpenAiChatBody(body, upstreamModel) {
-  const stripTools = !FORWARD_TOOLS;
   const out = {
     model: upstreamModel,
-    messages: sanitizeOpenAiMessages(body?.messages, stripTools),
+    messages: sanitizeOpenAiMessages(body?.messages, STRIP_TOOLS),
     stream: body?.stream === true,
   };
 
@@ -379,7 +443,7 @@ function sanitizeOpenAiChatBody(body, upstreamModel) {
   if (body?.top_p != null) out.top_p = body.top_p;
   if (body?.stop != null) out.stop = body.stop;
 
-  if (!stripTools) {
+  if (!STRIP_TOOLS) {
     const tools = sanitizeOpenAiTools(body?.tools);
     if (tools.length) {
       out.tools = tools;
@@ -390,6 +454,38 @@ function sanitizeOpenAiChatBody(body, upstreamModel) {
   return out;
 }
 
+function validateIncomingTools(tools) {
+  if (!STRICT_TOOLS || STRIP_TOOLS || !Array.isArray(tools) || !tools.length) return null;
+  const valid = sanitizeOpenAiTools(tools);
+  if (valid.length) return null;
+  return {
+    type: "invalid_request_error",
+    message:
+      `请求包含 ${tools.length} 个 tools，但均缺少必需的 function.name。` +
+      "请在对话项目中为每个工具填写名称，或设置 GATEWAY_STRICT_TOOLS=0（默认）让 Gateway 先去掉空占位符继续聊天。",
+    gateway_tools_dropped: tools.length,
+    gateway_tools_example: {
+      type: "function",
+      function: {
+        name: "get_weather",
+        description: "Get weather for a city",
+        parameters: { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+      },
+    },
+  };
+}
+
+function warnDroppedTools(tools) {
+  if (STRIP_TOOLS || !Array.isArray(tools) || !tools.length) return;
+  const valid = sanitizeOpenAiTools(tools);
+  const dropped = tools.length - valid.length;
+  if (dropped > 0) {
+    console.warn(
+      `[gateway] dropped ${dropped}/${tools.length} tool(s) without function.name; forwarded ${valid.length}`
+    );
+  }
+}
+
 function sanitizeOpenAiTools(tools) {
   if (!Array.isArray(tools)) return [];
   return tools
@@ -397,12 +493,30 @@ function sanitizeOpenAiTools(tools) {
     .filter(Boolean);
 }
 
+function extractOpenAiToolName(tool) {
+  if (!tool || typeof tool !== "object") return "";
+  const fn = tool.function && typeof tool.function === "object" ? tool.function : tool;
+  const candidates = [
+    fn.name,
+    tool.name,
+    tool.function_name,
+    tool.tool_name,
+    fn.function_name,
+    tool.function?.function_name,
+  ];
+  for (const value of candidates) {
+    const name = String(value ?? "").trim();
+    if (name) return name;
+  }
+  const id = String(tool.id ?? fn.id ?? "").trim();
+  if (id && /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/.test(id)) return id;
+  return "";
+}
+
 function normalizeOpenAiTool(tool) {
   if (!tool || typeof tool !== "object") return null;
 
-  const nestedName = tool.function?.name;
-  const flatName = tool.name;
-  const name = String(nestedName || flatName || "").trim();
+  const name = extractOpenAiToolName(tool);
   if (!name) return null;
 
   const fn = tool.function && typeof tool.function === "object" ? tool.function : tool;
@@ -619,10 +733,9 @@ function asArray(value) {
   return Array.isArray(value) ? value : [value];
 }
 
-function normalizeModel(model, config = readGatewayConfig(), route = resolveRoute(config, model)) {
-  if (!model) return getDefaultModel(config);
-  if (/^claude-|^(haiku|sonnet|opus)$/i.test(model)) return getDefaultModel(config);
-  return model;
+function normalizeModel(model, config = readGatewayConfig()) {
+  const requested = String(model || "").trim();
+  return requested || getDefaultModel(config);
 }
 
 async function streamOpenAiAsAnthropic(upstream, res, model) {
@@ -920,6 +1033,13 @@ async function handleAdminTest(body, res) {
   const config = readGatewayConfig();
   const saved =
     config.routes.find((item) => item.id === body.routeId) || resolveRoute(config, body.model);
+  if (!saved) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: unknownModelError(String(body.model || "").trim(), config).error.message,
+      availableModels: listConfiguredModels(config),
+    });
+  }
   const route = {
     ...saved,
     ...(body.baseUrl?.trim() ? { baseUrl: body.baseUrl.trim() } : {}),
@@ -940,6 +1060,14 @@ async function handleAdminTest(body, res) {
       error: `上游「${route.name}」仍是模板占位密钥，请粘贴真实 API Key 后再测试。`,
     });
   }
+  try {
+    new URL(upstreamUrl(route));
+  } catch {
+    return sendJson(res, 400, {
+      ok: false,
+      error: `上游「${route.name}」请求 URL 无效，请填写完整 URL，例如 https://.../v1/chat/completions。`,
+    });
+  }
 
   const startedAt = Date.now();
   const payload = {
@@ -948,28 +1076,36 @@ async function handleAdminTest(body, res) {
     temperature: 0,
     stream: false,
   };
-  const upstream =
-    route.type === "anthropic-messages"
-      ? await fetch(upstreamUrl(route), {
-          method: "POST",
-          headers: {
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ ...payload, messages: [{ role: "user", content: "Reply with exactly OK" }] }),
-        })
-      : await fetch(upstreamUrl(route), {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            ...payload,
-            messages: [{ role: "user", content: "Reply with exactly OK" }],
-          }),
-        });
+  let upstream;
+  try {
+    upstream =
+      route.type === "anthropic-messages"
+        ? await fetch(upstreamUrl(route), {
+            method: "POST",
+            headers: {
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ ...payload, messages: [{ role: "user", content: "Reply with exactly OK" }] }),
+          })
+        : await fetch(upstreamUrl(route), {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              ...payload,
+              messages: [{ role: "user", content: "Reply with exactly OK" }],
+            }),
+          });
+  } catch (err) {
+    return sendJson(res, 502, {
+      ok: false,
+      error: `无法连接上游「${route.name}」：${err.message || String(err)}`,
+    });
+  }
   const text = await upstream.text();
   if (!upstream.ok) {
     return sendJson(res, upstream.status, {
@@ -1080,11 +1216,22 @@ function writeGatewayConfig(input) {
         : existing?.apiKey || (id === "nvidia" ? localNvidiaProfile.apiKey : "");
     return normalizeRoute({ ...route, id, apiKey });
   });
+  const invalid = routes.find((route) => route.enabled !== false && !route.models.length);
+  if (invalid) {
+    const err = new Error(`渠道「${invalid.name || invalid.id}」没有可用模型，请至少填写一个模型 ID。`);
+    err.status = 400;
+    err.type = "invalid_config";
+    throw err;
+  }
 
   const mergedRoutes = routes.length ? routes : defaultConfig().routes;
   const requestedDefault = String(input.defaultModel ?? current.defaultModel ?? "").trim();
+  const availableModels = listConfiguredModels({ routes: mergedRoutes, defaultModel: "" });
+  const defaultModel = requestedDefault && availableModels.includes(requestedDefault)
+    ? requestedDefault
+    : inferGatewayDefaultModel(mergedRoutes);
   const next = {
-    defaultModel: requestedDefault || inferGatewayDefaultModel(mergedRoutes),
+    defaultModel,
     routes: mergedRoutes,
   };
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + "\n");
@@ -1175,14 +1322,47 @@ function redactConfig(config) {
   };
 }
 
+function unknownModelError(model, config) {
+  const availableModels = listConfiguredModels(config);
+  return {
+    error: {
+      type: "invalid_request_error",
+      code: "unknown_model",
+      message:
+        `模型「${model}」没有配置到任何启用渠道。` +
+        "请在管理页添加该模型，或把请求里的 model 改成已配置模型。",
+      model,
+      available_models: availableModels,
+      admin_hint: "打开 Gateway 管理页，在对应渠道的模型列表里添加这个模型 ID。",
+    },
+  };
+}
+
+function resolveModelRoute(config, requestedModel) {
+  const explicitModel = String(requestedModel || "").trim();
+  const model = normalizeModel(explicitModel, config);
+  const route = resolveRoute(config, model);
+  if (!route && explicitModel) {
+    return { status: 400, error: unknownModelError(model, config) };
+  }
+  if (!route) {
+    return {
+      route: config.routes.filter((item) => item.enabled !== false)[0] || defaultConfig().routes[0],
+      model,
+    };
+  }
+  return { route, model };
+}
+
 function resolveRoute(config, requestedModel) {
   const routes = config.routes.filter((route) => route.enabled !== false);
-  if (!routes.length) return defaultConfig().routes[0];
-  const model = requestedModel || "";
+  if (!routes.length) return null;
+  const model = String(requestedModel || "").trim();
+  if (!model) return routes[0];
   const prefixed = routes.find((route) => model.startsWith(`${route.id}/`));
   if (prefixed) return prefixed;
   const exact = routes.find((route) => route.models.includes(model) || route.defaultModel === model);
-  return exact || routes[0];
+  return exact || null;
 }
 
 function resolveRouteApiKey(route) {
@@ -1238,3 +1418,22 @@ function serveFile(res, path, contentType) {
   res.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-store" });
   res.end(fs.readFileSync(path));
 }
+
+export {
+  CLOUD_CONFIG_MODE,
+  CONFIG_FILE,
+  HTTP_ONLY,
+  configIsPersistent,
+  configPathLabel,
+  getDefaultModel,
+  listConfiguredModels,
+  normalizeModel,
+  resolveModelRoute,
+  resolveModelsConfigPath,
+  resolveRoute,
+  sanitizeOpenAiChatBody,
+  sanitizeOpenAiTools,
+  startGateway,
+  unknownModelError,
+  writeGatewayConfig,
+};

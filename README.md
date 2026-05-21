@@ -25,6 +25,8 @@ No npm dependencies are required.
 
 ## Quick Start
 
+Local startup always uses the project `models.json` by default, even if `.env.local` contains Zeabur-oriented hints such as `ZEABUR=1`, `NODE_ENV=production`, or `GATEWAY_DATA_DIR=/data`. This keeps local testing from accidentally writing to `/data/models.json`.
+
 ```bash
 npm start
 ```
@@ -38,7 +40,13 @@ http://127.0.0.1:7080
 The default ports can be changed with environment variables:
 
 ```bash
-PORT=7443 HTTP_PORT=7080 npm start
+HTTP_PORT=7080 HTTPS_PORT=7443 npm start
+```
+
+Run the built-in checks before deploying:
+
+```bash
+npm run check
 ```
 
 ## Configuration
@@ -85,6 +93,7 @@ For other agents or OpenAI-compatible clients, standardize on **one URL** and **
 - **Model list:** `GET http://127.0.0.1:7080/v1/models`
 
 The `model` string must match a model configured under some enabled route in `models.json` (same IDs you see in the admin UI).
+If `model` is omitted, Gateway uses the Gateway-wide default model. If a non-empty unknown `model` is sent, Gateway returns `400 unknown_model` and includes the configured model list.
 
 ### Hermes Desktop（保存路由后自动同步）
 
@@ -196,6 +205,7 @@ Zeabur 会注入 `PORT`；容器内没有本地 TLS 证书时，Gateway 自动�
 启动命令保持 `npm start` 即可。
 
 **网页里新增/修改的渠道会写入 `models.json`**（含 API Key，不进 Git）。云上默认路径为 **`/data/models.json`**（环境变量 `GATEWAY_DATA_DIR=/data`）。
+本地开发默认仍写项目内 `models.json`；只有真实运行时环境变量或容器环境启用 `GATEWAY_HTTP_ONLY=1` / `ZEABUR=1` / `NODE_ENV=production` 时，才使用云端数据目录。
 
 **Zeabur 方案 A（持久化卷，推荐）：** 详见 **[ZEABUR.md](./ZEABUR.md)**
 
@@ -212,6 +222,23 @@ Zeabur 会注入 `PORT`；容器内没有本地 TLS 证书时，Gateway 自动�
 - **模型名**：与管理页里一致
 
 连接入口路径与本地相同，例如 `POST /v1/chat/completions`、`GET /v1/models`。
+
+## Health and Troubleshooting
+
+`GET /health` returns the active runtime and configuration state:
+
+- `runtimeMode`: `local` or `cloud`
+- `configFile` / `configFileLabel`: the actual route config file in use
+- `configPersistent`: whether the current config path is intended to survive redeploys
+- `enabledProviderCount` / `routeCount`: enabled channels and total channels
+- `toolsMode`: `sanitize`, `strict`, or `strip`
+
+Common checks:
+
+```bash
+npm run check
+curl -H "Authorization: Bearer $GATEWAY_API_KEY" http://127.0.0.1:7080/health
+```
 
 ## Security Notes
 
