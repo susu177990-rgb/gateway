@@ -195,12 +195,15 @@ Zeabur 会注入 `PORT`；容器内没有本地 TLS 证书时，Gateway 自动�
 
 启动命令保持 `npm start` 即可。
 
-**渠道配置存在 `models.json`，不会随 Git 推送**（含 API Key，已在 `.gitignore`）。Zeabur 每次重新部署会清空容器，若未挂盘会重新从 `models.example.json` 生成默认渠道（NVIDIA / Google / LM Studio 等模板），你在网页里改的配置会丢失。
+**网页里新增/修改的渠道会写入 `models.json`**（含 API Key，不进 Git）。云上默认路径为 **`/data/models.json`**（环境变量 `GATEWAY_DATA_DIR=/data`）。
 
-**解决办法（二选一）：**
+**Zeabur 一次性设置（之后网页改配置永久保留）：**
 
-1. Zeabur 挂载**持久化卷**到 `/data`，并设环境变量 `MODELS_CONFIG_PATH=/data/models.json`（首次在管理页保存后即持久保留）
-2. 在 Zeabur 环境变量里配置 `GOOGLE_API_KEY`、`NVIDIA_API_KEY` 等，与 `models.example.json` 里的渠道 id 对应，重新部署后会自动注入密钥
+1. 服务 → **Volumes（持久化存储）** → 添加卷，挂载路径填 **`/data`**
+2. 环境变量可加 `GATEWAY_DATA_DIR=/data`（Dockerfile 已默认，写上更直观）
+3. 重新部署后，在管理页配置渠道；以后 redeploy 不会丢
+
+未挂 `/data` 卷时，容器重建仍会清空配置。
 
 给其它 AI 应用填写：
 

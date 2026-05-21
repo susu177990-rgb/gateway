@@ -39,18 +39,18 @@ const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
 const CERT = process.env.TLS_CERT || new URL("./certs/localhost.crt", import.meta.url);
 const KEY = process.env.TLS_KEY || new URL("./certs/localhost.key", import.meta.url);
-const CONFIG_FILE = process.env.MODELS_CONFIG_PATH?.trim()
-  ? path.resolve(process.env.MODELS_CONFIG_PATH.trim())
-  : fileURLToPath(new URL("./models.json", import.meta.url));
-const EXAMPLE_CONFIG_FILE = fileURLToPath(new URL("./models.example.json", import.meta.url));
 const STATIC_DIR = new URL("./public/", import.meta.url);
 const HERMES_SYNC_SCRIPT = fileURLToPath(new URL("./scripts/sync-hermes-models.mjs", import.meta.url));
+const LEGACY_CONFIG_FILE = fileURLToPath(new URL("./models.json", import.meta.url));
+const EXAMPLE_CONFIG_FILE = fileURLToPath(new URL("./models.example.json", import.meta.url));
 
 const HTTP_ONLY =
   process.env.GATEWAY_HTTP_ONLY === "1" ||
   process.env.ZEABUR === "1" ||
   process.env.NODE_ENV === "production" ||
   !tlsCertsExist();
+const GATEWAY_DATA_DIR = (process.env.GATEWAY_DATA_DIR || "/data").trim() || "/data";
+const CONFIG_FILE = resolveModelsConfigPath();
 const BIND_HOST = process.env.BIND_HOST || (HTTP_ONLY ? "0.0.0.0" : "127.0.0.1");
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || 7443);
 const HTTP_PORT = Number(process.env.HTTP_PORT || 7080);
@@ -58,6 +58,16 @@ const LISTEN_PORT = HTTP_ONLY ? Number(process.env.PORT || 8080) : HTTP_PORT;
 const PUBLIC_BASE =
   (process.env.PUBLIC_BASE || "").trim() ||
   (HTTP_ONLY ? `http://127.0.0.1:${LISTEN_PORT}` : `https://127.0.0.1:${HTTPS_PORT}`);
+
+function resolveModelsConfigPath() {
+  if (process.env.MODELS_CONFIG_PATH?.trim()) {
+    return path.resolve(process.env.MODELS_CONFIG_PATH.trim());
+  }
+  if (HTTP_ONLY) {
+    return path.join(GATEWAY_DATA_DIR, "models.json");
+  }
+  return LEGACY_CONFIG_FILE;
+}
 
 function tlsCertsExist() {
   try {
@@ -85,6 +95,7 @@ const httpServer = http.createServer((req, res) => {
 
 function logStartup() {
   console.log(`Gateway mode: ${HTTP_ONLY ? "HTTP (cloud)" : "HTTPS + HTTP (local)"}`);
+  console.log(`Config file: ${CONFIG_FILE}`);
   console.log(`Default model: ${DEFAULT_MODEL}`);
   if (GATEWAY_API_KEY) console.log("Gateway client API key auth enabled (GATEWAY_API_KEY)");
 }
@@ -151,6 +162,8 @@ async function route(req, res, base = PUBLIC_BASE) {
       mode: HTTP_ONLY ? "http" : "local",
       listen: { host: BIND_HOST, port: HTTP_ONLY ? LISTEN_PORT : HTTP_PORT, httpOnly: HTTP_ONLY },
       publicBase: PUBLIC_BASE,
+      configFile: CONFIG_FILE,
+      configPersistent: HTTP_ONLY,
       providerCount: config.routes.filter((route) => route.enabled !== false).length,
       defaultModel: getDefaultModel(config),
       entrypoints: [
@@ -912,6 +925,11 @@ function writeGatewayConfig(input) {
 function ensureConfigFile() {
   if (fs.existsSync(CONFIG_FILE)) return;
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  if (LEGACY_CONFIG_FILE !== CONFIG_FILE && fs.existsSync(LEGACY_CONFIG_FILE)) {
+    fs.copyFileSync(LEGACY_CONFIG_FILE, CONFIG_FILE);
+    console.log(`Migrated config: ${LEGACY_CONFIG_FILE} -> ${CONFIG_FILE}`);
+    return;
+  }
   if (fs.existsSync(EXAMPLE_CONFIG_FILE)) {
     fs.copyFileSync(EXAMPLE_CONFIG_FILE, CONFIG_FILE);
     return;
