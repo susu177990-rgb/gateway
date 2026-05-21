@@ -34,6 +34,7 @@ loadEnvFile(".env");
 const GATEWAY_API_KEY = (
   process.env.GATEWAY_API_KEY || "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b"
 ).trim();
+const CORS_ORIGIN = (process.env.CORS_ORIGIN || "*").trim() || "*";
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
@@ -126,7 +127,32 @@ if (HTTP_ONLY) {
   });
 }
 
+function applyCors(req, res) {
+  const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+  let allowOrigin = "*";
+  if (CORS_ORIGIN !== "*") {
+    const allowed = CORS_ORIGIN.split(",").map((item) => item.trim()).filter(Boolean);
+    allowOrigin = allowed.includes(requestOrigin) ? requestOrigin : allowed[0] || "*";
+  }
+  res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization, Content-Type, x-api-key, X-Requested-With",
+  );
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
 async function route(req, res, base = PUBLIC_BASE) {
+  applyCors(req, res);
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   const url = new URL(req.url || "/", base);
   console.log(`${new Date().toISOString()} ${req.method} ${url.pathname}`);
 

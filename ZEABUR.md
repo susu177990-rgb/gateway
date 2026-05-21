@@ -40,6 +40,16 @@ https://你的域名/health
 
 若 `configFile` 为 `/data/models.json`，且你在网页保存后再次 Redeploy，渠道 Key 仍在，说明卷已生效。
 
+## 浏览器项目接 API（CORS）
+
+若前端报 **`Failed to fetch`**，在环境变量加（或保持默认）：
+
+```env
+CORS_ORIGIN=*
+```
+
+默认已允许所有来源。Redeploy 后生效。
+
 ## 注意
 
 - **统一 API Key**（`GATEWAY_API_KEY`）在环境变量里，本来就不会因 Redeploy 丢失
