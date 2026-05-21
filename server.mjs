@@ -2,6 +2,7 @@ import https from "node:https";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -38,7 +39,10 @@ const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
 const CERT = process.env.TLS_CERT || new URL("./certs/localhost.crt", import.meta.url);
 const KEY = process.env.TLS_KEY || new URL("./certs/localhost.key", import.meta.url);
-const CONFIG_FILE = new URL("./models.json", import.meta.url);
+const CONFIG_FILE = process.env.MODELS_CONFIG_PATH?.trim()
+  ? path.resolve(process.env.MODELS_CONFIG_PATH.trim())
+  : fileURLToPath(new URL("./models.json", import.meta.url));
+const EXAMPLE_CONFIG_FILE = fileURLToPath(new URL("./models.example.json", import.meta.url));
 const STATIC_DIR = new URL("./public/", import.meta.url);
 const HERMES_SYNC_SCRIPT = fileURLToPath(new URL("./scripts/sync-hermes-models.mjs", import.meta.url));
 
@@ -824,7 +828,33 @@ async function handleAdminTest(body, res) {
 
 function readGatewayConfig() {
   ensureConfigFile();
-  return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+  const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+  return {
+    ...config,
+    routes: (config.routes || []).map(applyRouteEnvSecrets),
+  };
+}
+
+const ROUTE_ENV_KEYS = {
+  nvidia: "NVIDIA_API_KEY",
+  google: "GOOGLE_API_KEY",
+  "lm-studio": "LM_STUDIO_API_KEY",
+};
+
+function applyRouteEnvSecrets(route) {
+  const envVar = ROUTE_ENV_KEYS[route.id];
+  const fromEnv = envVar ? (process.env[envVar] || "").trim() : "";
+  const key = String(route.apiKey || "").trim();
+  const placeholder =
+    !key || /^replace-with/i.test(key) || key === "not-required-for-local-only";
+  if (fromEnv && (placeholder || !key)) {
+    return { ...route, apiKey: fromEnv };
+  }
+  if (route.id === "nvidia" && !key) {
+    const nv = (process.env.NVIDIA_API_KEY || localNvidiaProfile.apiKey || "").trim();
+    if (nv) return { ...route, apiKey: nv };
+  }
+  return route;
 }
 
 function scheduleHermesSync() {
@@ -880,9 +910,13 @@ function writeGatewayConfig(input) {
 }
 
 function ensureConfigFile() {
-  if (!fs.existsSync(CONFIG_FILE)) {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig(), null, 2) + "\n");
+  if (fs.existsSync(CONFIG_FILE)) return;
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  if (fs.existsSync(EXAMPLE_CONFIG_FILE)) {
+    fs.copyFileSync(EXAMPLE_CONFIG_FILE, CONFIG_FILE);
+    return;
   }
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig(), null, 2) + "\n");
 }
 
 function inferGatewayDefaultModel(routes) {

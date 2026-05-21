@@ -193,7 +193,14 @@ Zeabur 会注入 `PORT`；容器内没有本地 TLS 证书时，Gateway 自动�
 | `NVIDIA_API_KEY` | 你的上游 Key | 首次启动默认 NVIDIA 渠道会用 |
 | `GATEWAY_HTTP_ONLY` | `1` | 可选；无证书时也会自动开启 |
 
-启动命令保持 `npm start` 即可。重新部署后，用浏览器打开你的域名，在管理页配置渠道；`models.json` 在容器重启后会丢失，除非在 Zeabur 挂载持久化卷到项目目录。
+启动命令保持 `npm start` 即可。
+
+**渠道配置存在 `models.json`，不会随 Git 推送**（含 API Key，已在 `.gitignore`）。Zeabur 每次重新部署会清空容器，若未挂盘会重新从 `models.example.json` 生成默认渠道（NVIDIA / Google / LM Studio 等模板），你在网页里改的配置会丢失。
+
+**解决办法（二选一）：**
+
+1. Zeabur 挂载**持久化卷**到 `/data`，并设环境变量 `MODELS_CONFIG_PATH=/data/models.json`（首次在管理页保存后即持久保留）
+2. 在 Zeabur 环境变量里配置 `GOOGLE_API_KEY`、`NVIDIA_API_KEY` 等，与 `models.example.json` 里的渠道 id 对应，重新部署后会自动注入密钥
 
 给其它 AI 应用填写：
 
