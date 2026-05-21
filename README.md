@@ -197,13 +197,13 @@ Zeabur 会注入 `PORT`；容器内没有本地 TLS 证书时，Gateway 自动�
 
 **网页里新增/修改的渠道会写入 `models.json`**（含 API Key，不进 Git）。云上默认路径为 **`/data/models.json`**（环境变量 `GATEWAY_DATA_DIR=/data`）。
 
-**Zeabur 一次性设置（之后网页改配置永久保留）：**
+**Zeabur 方案 A（持久化卷，推荐）：** 详见 **[ZEABUR.md](./ZEABUR.md)**
 
-1. 服务 → **Volumes（持久化存储）** → 添加卷，挂载路径填 **`/data`**
-2. 环境变量可加 `GATEWAY_DATA_DIR=/data`（Dockerfile 已默认，写上更直观）
-3. 重新部署后，在管理页配置渠道；以后 redeploy 不会丢
+1. 服务 → **Volumes** → **Mount Volumes** → 挂载目录 **`/data`**
+2. Redeploy 后，在管理页填入各渠道上游 API Key 并保存
+3. 以后 Redeploy / 推送代码 **不会**再丢渠道配置
 
-未挂 `/data` 卷时，容器重建仍会清空配置。
+未挂 `/data` 卷时，每次新容器都会从 `models.example.json` 重新生成，API Key 变回占位符。
 
 给其它 AI 应用填写：
 

@@ -165,6 +165,9 @@ async function route(req, res, base = PUBLIC_BASE) {
       publicBase: PUBLIC_BASE,
       configFile: CONFIG_FILE,
       configPersistent: HTTP_ONLY,
+      storageHint: HTTP_ONLY
+        ? "Mount Zeabur volume at /data (see ZEABUR.md) so models.json survives redeploy."
+        : null,
       providerCount: config.routes.filter((route) => route.enabled !== false).length,
       defaultModel: getDefaultModel(config),
       entrypoints: [
@@ -961,6 +964,9 @@ function ensureConfigFile() {
   }
   if (fs.existsSync(EXAMPLE_CONFIG_FILE)) {
     fs.copyFileSync(EXAMPLE_CONFIG_FILE, CONFIG_FILE);
+    console.warn(
+      `[gateway] 已从模板创建 ${CONFIG_FILE}。请在 Zeabur Volumes 挂载 /data，否则 Redeploy 后网页里保存的上游 API Key 会丢失。见 ZEABUR.md`,
+    );
     return;
   }
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig(), null, 2) + "\n");
