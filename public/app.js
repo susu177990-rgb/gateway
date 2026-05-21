@@ -9,24 +9,40 @@ const gatewayDefaultModelEl = document.querySelector("#gatewayDefaultModel");
 
 const GATEWAY_CLIENT_KEY = "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b";
 const AUTOSAVE_MS = 600;
+let gatewayPublicOrigin = "";
+
 function gatewayOrigin() {
   const { protocol, hostname, port } = window.location;
   if (!port || port === "443" || port === "80") return `${protocol}//${hostname}`;
   return `${protocol}//${hostname}:${port}`;
 }
 
+function resolveGatewayOrigin() {
+  return gatewayPublicOrigin || gatewayOrigin();
+}
+
+function applyPublicBase(publicBase) {
+  const raw = String(publicBase || "").trim();
+  if (!raw) return;
+  try {
+    gatewayPublicOrigin = new URL(raw).origin;
+  } catch {
+    gatewayPublicOrigin = raw.replace(/\/$/, "");
+  }
+}
+
 const ENTRY_URLS = {
   get anthropic() {
-    return `${gatewayOrigin()}/v1/messages`;
+    return `${resolveGatewayOrigin()}/v1/messages`;
   },
   get openai() {
-    return `${gatewayOrigin()}/v1/chat/completions`;
+    return `${resolveGatewayOrigin()}/v1/chat/completions`;
   },
 };
 
 let routes = [];
 let gatewayDefaultModel = "";
-let baseStatus = "正在读取本地服务状态…";
+let baseStatus = "正在连接 Gateway…";
 let saveState = "idle";
 let saveStateDetail = "";
 let autosaveTimer = null;
@@ -118,8 +134,6 @@ async function flushAutosave() {
 }
 
 addBtn.addEventListener("click", addRoute);
-
-renderEntryUrls();
 
 entryList?.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-copy]");
@@ -316,14 +330,17 @@ async function load() {
   gatewayDefaultModel = config.defaultModel || health.defaultModel || "";
   if (gatewayDefaultModelEl) gatewayDefaultModelEl.value = gatewayDefaultModel;
   refreshGatewayModelSelect();
+  applyPublicBase(health.publicBase);
+  renderEntryUrls();
   const authHint = health.gatewayClientAuth?.required ? " · 网关鉴权已开启" : "";
-  setBaseStatus(`运行中 · 共 ${routes.length} 个渠道 · Gateway 默认：${health.defaultModel || "-"}${authHint}`);
+  const hostHint = gatewayPublicOrigin ? ` · ${gatewayPublicOrigin}` : "";
+  setBaseStatus(`运行中 · 共 ${routes.length} 个渠道 · 默认：${health.defaultModel || "-"}${hostHint}${authHint}`);
   hydrating = false;
   render();
 }
 
 function renderEntryUrls() {
-  const origin = gatewayOrigin();
+  const origin = resolveGatewayOrigin();
   document.querySelector("#gatewayListenAddr")?.replaceChildren(document.createTextNode(origin));
   entryList?.querySelectorAll(".entry-url[data-entry]").forEach((el) => {
     const key = el.dataset.entry;
