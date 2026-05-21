@@ -17,7 +17,10 @@ const STATIC_DIR = new URL("./public/", import.meta.url);
 const HERMES_SYNC_SCRIPT = fileURLToPath(new URL("./scripts/sync-hermes-models.mjs", import.meta.url));
 
 const HTTP_ONLY =
-  process.env.GATEWAY_HTTP_ONLY === "1" || process.env.ZEABUR === "1" || !tlsCertsExist();
+  process.env.GATEWAY_HTTP_ONLY === "1" ||
+  process.env.ZEABUR === "1" ||
+  process.env.NODE_ENV === "production" ||
+  !tlsCertsExist();
 const BIND_HOST = process.env.BIND_HOST || (HTTP_ONLY ? "0.0.0.0" : "127.0.0.1");
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || 7443);
 const HTTP_PORT = Number(process.env.HTTP_PORT || 7080);
