@@ -30,7 +30,9 @@ function loadEnvFile(filename) {
 loadEnvFile(".env.local");
 loadEnvFile(".env");
 
-const GATEWAY_API_KEY = (process.env.GATEWAY_API_KEY || "").trim();
+const GATEWAY_API_KEY = (
+  process.env.GATEWAY_API_KEY || "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b"
+).trim();
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
@@ -113,7 +115,7 @@ async function route(req, res, base = PUBLIC_BASE) {
   console.log(`${new Date().toISOString()} ${req.method} ${url.pathname}`);
 
   const publicStatic =
-    req.method === "GET" && ["/", "/app.js", "/styles.css"].includes(url.pathname);
+    req.method === "GET" && ["/", "/app.js", "/styles.css", "/config.js"].includes(url.pathname);
   if (GATEWAY_API_KEY && !publicStatic && !clientGatewayAuthOk(req)) {
     return sendJson(res, 401, {
       type: "error",
@@ -123,6 +125,11 @@ async function route(req, res, base = PUBLIC_BASE) {
 
   if (req.method === "GET" && url.pathname === "/") {
     return serveFile(res, new URL("./index.html", STATIC_DIR), "text/html; charset=utf-8");
+  }
+
+  if (req.method === "GET" && url.pathname === "/config.js") {
+    const key = JSON.stringify(GATEWAY_API_KEY);
+    return sendBody(res, 200, `window.__GATEWAY_CLIENT_KEY__=${key};\n`, "application/javascript; charset=utf-8");
   }
 
   if (req.method === "GET" && url.pathname === "/app.js") {
@@ -683,6 +690,11 @@ function sse(res, event, data) {
 function sendJson(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
+}
+
+function sendBody(res, status, body, contentType) {
+  res.writeHead(status, { "Content-Type": contentType, "Cache-Control": "no-store" });
+  res.end(body);
 }
 
 function presentedGatewayKey(req) {

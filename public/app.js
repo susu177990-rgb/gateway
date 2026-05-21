@@ -8,6 +8,7 @@ const gatewayClientKey = document.querySelector("#gatewayClientKey");
 const gatewayDefaultModelEl = document.querySelector("#gatewayDefaultModel");
 
 const GATEWAY_KEY_STORAGE = "gateway.clientApiKey";
+const GATEWAY_CLIENT_KEY_DEFAULT = "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b";
 const AUTOSAVE_MS = 600;
 function gatewayOrigin() {
   const { protocol, hostname, port } = window.location;
@@ -154,7 +155,10 @@ gatewayClientKey?.addEventListener("keydown", (event) => {
 });
 
 if (gatewayClientKey) {
-  gatewayClientKey.value = localStorage.getItem(GATEWAY_KEY_STORAGE) || "";
+  const serverKey = String(window.__GATEWAY_CLIENT_KEY__ || "").trim();
+  const storedKey = localStorage.getItem(GATEWAY_KEY_STORAGE) || "";
+  gatewayClientKey.value = serverKey || storedKey || GATEWAY_CLIENT_KEY_DEFAULT;
+  localStorage.setItem(GATEWAY_KEY_STORAGE, gatewayClientKey.value);
 }
 
 gatewayDefaultModelEl?.addEventListener("change", () => {
