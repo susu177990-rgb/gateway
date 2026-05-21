@@ -476,12 +476,23 @@ body::before {
 .view-model {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   padding: 8px 12px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
+}
+
+.view-model-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.view-model-main code {
+  word-break: break-all;
 }
 
 .view-model--default {
@@ -550,8 +561,25 @@ body::before {
 .model-cell {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
+}
+
+.model-test-state {
+  flex-shrink: 0;
+  min-width: 4.5em;
+  font-size: 10px;
+  text-align: right;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.model-test-state.ok {
+  color: #34d399;
+}
+
+.model-test-state.error {
+  color: #f87171;
 }
 
 .model-cell .input {

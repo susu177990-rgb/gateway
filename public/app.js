@@ -266,7 +266,14 @@ function renderCardView(node, route) {
   list.innerHTML = models
     .map(
       (model, idx) =>
-        `<li class="view-model${idx === 0 ? " view-model--default" : ""}"><code class="mono">${escapeHtml(model)}</code>${idx === 0 ? '<span class="view-model-badge">默认</span>' : ""}</li>`,
+        `<li class="view-model${idx === 0 ? " view-model--default" : ""}">
+          <div class="view-model-main">
+            <code class="mono">${escapeHtml(model)}</code>
+            ${idx === 0 ? '<span class="view-model-badge">默认</span>' : ""}
+          </div>
+          <span class="model-test-state" data-role="modelTestState" aria-live="polite"></span>
+          <button type="button" class="btn btn-ghost btn-xs" data-action="test-model" data-model="${escapeHtml(model)}">测试</button>
+        </li>`,
     )
     .join("");
 }
@@ -450,41 +457,15 @@ function bindRoute(node, route, index) {
     scheduleAutosave();
   });
 
-  const testBtn = node.querySelector('[data-action="test"]');
-  const testState = node.querySelector('[data-role="testState"]');
-  testBtn.addEventListener("click", async () => {
-    testState.textContent = "测试中…";
-    testState.className = "card-message";
-    testBtn.disabled = true;
-
-    try {
-      syncAllRoutesFromDom();
-      const current = routes[index] || route;
-      validateRouteForTest(current);
-      const result = await fetchJson("/admin/test", {
-        method: "POST",
-        body: JSON.stringify({
-          routeId: current.id,
-          model: current.defaultModel || String(current.models?.[0] || "").trim(),
-          baseUrl: (current.baseUrl || "").trim(),
-          apiKey: (current.apiKey || "").trim(),
-        }),
-      });
-
-      if (result.ok) {
-        await flushAutosave();
-        testState.textContent = `✓ 成功 · ${result.latencyMs}ms · ${result.reply || "已响应"} · 已保存`;
-        testState.className = "card-message ok";
-      } else {
-        testState.textContent = `✗ ${result.error || "失败"}`;
-        testState.className = "card-message error";
-      }
-    } catch (err) {
-      testState.textContent = `✗ ${err.message}`;
-      testState.className = "card-message error";
-    } finally {
-      testBtn.disabled = false;
-    }
+  node.addEventListener("click", async (event) => {
+    const testBtn = event.target.closest('[data-action="test-model"]');
+    if (!testBtn || !node.contains(testBtn)) return;
+    const modelCell = testBtn.closest(".model-cell");
+    const modelId = modelCell
+      ? modelCell.querySelector('[data-role="model-name"]')?.value
+      : testBtn.dataset.model;
+    const stateEl = testBtn.closest(".model-cell, .view-model")?.querySelector('[data-role="modelTestState"]');
+    await runChannelModelTest(route, index, modelId, testBtn, stateEl);
   });
 
   applyCardMode(node, route, index);
@@ -558,12 +539,53 @@ function bindModels(node, route, onEdit) {
   draw();
 }
 
-function validateRouteForTest(route) {
+function validateRouteForTest(route, modelId) {
   if (!route.name?.trim()) throw new Error("请先填写渠道名称");
   if (!route.baseUrl?.trim()) throw new Error("请先填写完整请求 URL");
   if (!route.apiKey?.trim()) throw new Error("请先填写 API Key");
-  const model = route.defaultModel || route.models?.find(Boolean);
-  if (!model?.trim()) throw new Error("请先填写第一个模型（即默认模型）");
+  if (!String(modelId || "").trim()) throw new Error("请先填写模型 ID");
+}
+
+async function runChannelModelTest(route, index, modelId, testBtn, stateEl) {
+  const setState = (text, kind = "") => {
+    if (!stateEl) return;
+    stateEl.textContent = text;
+    stateEl.className = `model-test-state${kind ? ` ${kind}` : ""}`;
+    stateEl.removeAttribute("title");
+  };
+
+  setState("…");
+  testBtn.disabled = true;
+
+  try {
+    syncAllRoutesFromDom();
+    const current = routes[index] || route;
+    const model = String(modelId || "").trim();
+    validateRouteForTest(current, model);
+    const result = await fetchJson("/admin/test", {
+      method: "POST",
+      body: JSON.stringify({
+        routeId: current.id,
+        model,
+        baseUrl: (current.baseUrl || "").trim(),
+        apiKey: (current.apiKey || "").trim(),
+      }),
+    });
+
+    if (result.ok) {
+      await flushAutosave();
+      setState(`✓ ${result.latencyMs}ms`, "ok");
+      if (stateEl) stateEl.title = result.reply || "已响应";
+    } else {
+      setState("✗", "error");
+      if (stateEl) stateEl.title = result.error || "失败";
+    }
+  } catch (err) {
+    setState("✗", "error");
+    if (stateEl) stateEl.title = err.message || String(err);
+  } finally {
+    testBtn.disabled = false;
+  }
 }
 
 async function persist() {

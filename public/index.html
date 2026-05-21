@@ -103,7 +103,6 @@
           <button data-action="edit" type="button" class="btn btn-sm btn-outline card-view-only">编辑</button>
           <button data-action="save" type="button" class="btn btn-sm btn-primary card-edit-only">保存</button>
           <button data-action="delete" type="button" class="btn btn-sm btn-ghost card-edit-only" title="删除渠道">删除</button>
-          <button data-action="test" type="button" class="btn btn-sm btn-outline">测试</button>
         </div>
       </header>
 
@@ -145,17 +144,18 @@
         </div>
       </div>
 
-      <p class="card-message" data-role="testState"></p>
     </article>
   </template>
 
   <template id="modelTemplate">
     <div class="model-cell">
       <input data-role="model-name" class="input input-mono" placeholder="模型 ID" aria-label="模型 ID" />
+      <span class="model-test-state" data-role="modelTestState" aria-live="polite"></span>
+      <button data-action="test-model" type="button" class="btn btn-ghost btn-xs">测试</button>
       <button data-action="remove-model" type="button" class="btn btn-ghost btn-xs btn-square" title="删除" aria-label="删除模型">×</button>
     </div>
   </template>
 
-  <script src="/app.js?v=23"></script>
+  <script src="/app.js?v=24"></script>
 </body>
 </html>
