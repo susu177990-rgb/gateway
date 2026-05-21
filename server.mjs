@@ -94,6 +94,7 @@ const httpServer = http.createServer((req, res) => {
 });
 
 function logStartup() {
+  ensureConfigFile();
   console.log(`Gateway mode: ${HTTP_ONLY ? "HTTP (cloud)" : "HTTPS + HTTP (local)"}`);
   console.log(`Config file: ${CONFIG_FILE}`);
   console.log(`Default model: ${DEFAULT_MODEL}`);
