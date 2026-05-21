@@ -40,6 +40,17 @@ https://你的域名/health
 
 若 `configFile` 为 `/data/models.json`，且你在网页保存后再次 Redeploy，渠道 Key 仍在，说明卷已生效。
 
+## 网页对话项目（tools 报错）
+
+若报 `tools ... name Field required`，说明对话网页发了空的「函数/工具」占位符。  
+Gateway **默认会丢掉 tools** 再转发（普通聊天不受影响）。
+
+只有真要函数调用时，在环境变量加：
+
+```env
+GATEWAY_FORWARD_TOOLS=1
+```
+
 ## 浏览器项目接 API（CORS）
 
 若前端报 **`Failed to fetch`**，在环境变量加（或保持默认）：

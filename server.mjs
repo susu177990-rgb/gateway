@@ -35,6 +35,7 @@ const GATEWAY_API_KEY = (
   process.env.GATEWAY_API_KEY || "sk_9f4c2a7e8b1d4f6a92c0e3d5b7a18c6f4e2d9a0b"
 ).trim();
 const CORS_ORIGIN = (process.env.CORS_ORIGIN || "*").trim() || "*";
+const FORWARD_TOOLS = process.env.GATEWAY_FORWARD_TOOLS === "1";
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
@@ -196,6 +197,7 @@ async function route(req, res, base = PUBLIC_BASE) {
         : null,
       providerCount: config.routes.filter((route) => route.enabled !== false).length,
       defaultModel: getDefaultModel(config),
+      forwardTools: FORWARD_TOOLS,
       entrypoints: [
         "OpenAI Chat Completions POST /v1/chat/completions",
         "OpenAI alias POST /v1",
@@ -365,9 +367,10 @@ async function handleChatCompletions(body, res) {
 }
 
 function sanitizeOpenAiChatBody(body, upstreamModel) {
+  const stripTools = !FORWARD_TOOLS;
   const out = {
     model: upstreamModel,
-    messages: sanitizeOpenAiMessages(body?.messages),
+    messages: sanitizeOpenAiMessages(body?.messages, stripTools),
     stream: body?.stream === true,
   };
 
@@ -376,10 +379,12 @@ function sanitizeOpenAiChatBody(body, upstreamModel) {
   if (body?.top_p != null) out.top_p = body.top_p;
   if (body?.stop != null) out.stop = body.stop;
 
-  const tools = sanitizeOpenAiTools(body?.tools);
-  if (tools.length) {
-    out.tools = tools;
-    if (body?.tool_choice != null) out.tool_choice = body.tool_choice;
+  if (!stripTools) {
+    const tools = sanitizeOpenAiTools(body?.tools);
+    if (tools.length) {
+      out.tools = tools;
+      if (body?.tool_choice != null) out.tool_choice = body.tool_choice;
+    }
   }
 
   return out;
@@ -388,37 +393,36 @@ function sanitizeOpenAiChatBody(body, upstreamModel) {
 function sanitizeOpenAiTools(tools) {
   if (!Array.isArray(tools)) return [];
   return tools
-    .map((tool) => {
-      if (tool?.type === "function" && tool.function?.name) {
-        return {
-          type: "function",
-          function: {
-            name: String(tool.function.name),
-            description: tool.function.description ?? "",
-            parameters: tool.function.parameters ?? { type: "object", properties: {} },
-          },
-        };
-      }
-      if (tool?.name) {
-        return {
-          type: "function",
-          function: {
-            name: String(tool.name),
-            description: tool.description ?? "",
-            parameters: tool.input_schema ?? tool.parameters ?? { type: "object", properties: {} },
-          },
-        };
-      }
-      return null;
-    })
+    .map((tool) => normalizeOpenAiTool(tool))
     .filter(Boolean);
 }
 
-function sanitizeOpenAiMessages(messages) {
+function normalizeOpenAiTool(tool) {
+  if (!tool || typeof tool !== "object") return null;
+
+  const nestedName = tool.function?.name;
+  const flatName = tool.name;
+  const name = String(nestedName || flatName || "").trim();
+  if (!name) return null;
+
+  const fn = tool.function && typeof tool.function === "object" ? tool.function : tool;
+  return {
+    type: "function",
+    function: {
+      name,
+      description: fn.description ?? "",
+      parameters: fn.parameters ?? fn.input_schema ?? { type: "object", properties: {} },
+    },
+  };
+}
+
+function sanitizeOpenAiMessages(messages, stripTools = false) {
   if (!Array.isArray(messages)) return [];
   return messages
     .map((msg) => {
       if (!msg?.role) return null;
+      if (stripTools && msg.role === "tool") return null;
+
       const out = { role: msg.role };
 
       if (msg.role === "tool") {
@@ -427,7 +431,7 @@ function sanitizeOpenAiMessages(messages) {
         return out;
       }
 
-      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+      if (!stripTools && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
         out.tool_calls = msg.tool_calls
           .map((tc) => {
             const name = tc?.function?.name ?? tc?.name;
@@ -471,20 +475,22 @@ function sanitizeOpenAiMessages(messages) {
 }
 
 async function fetchOpenAiChat(route, apiKey, body, res) {
+  const payload = sanitizeOpenAiChatBody(body, body.model);
+
   const upstream = await fetch(upstreamUrl(route), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 
   if (!upstream.ok) {
     return sendJson(res, upstream.status, normalizeOpenAiError(await upstream.text(), upstream.status));
   }
 
-  if (body.stream) {
+  if (payload.stream) {
     res.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
