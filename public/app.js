@@ -117,6 +117,12 @@ function syncAllRoutesFromDom() {
     if (nameInput) route.name = nameInput.value;
     if (baseUrlInput) route.baseUrl = baseUrlInput.value;
     if (apiKeyInput) route.apiKey = apiKeyInput.value;
+
+    const modelInputs = card.querySelectorAll('[data-role="model-name"]');
+    if (modelInputs.length) {
+      route.models = Array.from(modelInputs).map((el) => el.value);
+      syncDefaultModel(route);
+    }
   });
 }
 
@@ -433,10 +439,7 @@ function bindRoute(node, route, index) {
   });
 
   node.querySelector('[data-action="save"]').addEventListener("click", async () => {
-    route.name = nameInput.value;
-    route.baseUrl = baseUrlInput.value;
-    route.apiKey = apiKeyInput.value;
-    syncDefaultModel(route);
+    syncAllRoutesFromDom();
 
     try {
       await flushAutosave();
@@ -604,11 +607,11 @@ async function runChannelModelTest(route, index, modelId, testBtn, stateEl) {
   }
 }
 
-async function persist() {
-  const payload = {
+function buildPersistPayload() {
+  return {
     defaultModel: (gatewayDefaultModelEl?.value || gatewayDefaultModel || "").trim(),
     routes: routes.map((route) => {
-      const models = (route.models || []).map((m) => m.trim()).filter(Boolean);
+      const models = (route.models || []).map((m) => String(m).trim()).filter(Boolean);
       const apiKey = (route.apiKey || "").trim();
       return {
         id: route.id || slug(route.name),
@@ -622,11 +625,30 @@ async function persist() {
       };
     }),
   };
+}
+
+async function persist() {
   return fetchJson("/admin/routes", {
     method: "PUT",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(buildPersistPayload()),
   });
 }
+
+function hasPendingRouteChanges() {
+  return saveState === "pending" || saveState === "saving";
+}
+
+window.addEventListener("beforeunload", () => {
+  if (!hasPendingRouteChanges()) return;
+  syncAllRoutesFromDom();
+  const payload = buildPersistPayload();
+  fetch("/admin/routes", {
+    method: "PUT",
+    keepalive: true,
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(payload),
+  });
+});
 
 function authHeaders() {
   if (!GATEWAY_CLIENT_KEY) return {};
