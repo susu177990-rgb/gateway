@@ -342,7 +342,7 @@ async function handleChatCompletions(body, res) {
   }
 
   if (route.type === "openai-chat") {
-    const upstreamBody = { ...body, model: upstreamModel };
+    const upstreamBody = sanitizeOpenAiChatBody(body, upstreamModel);
     return fetchOpenAiChat(route, apiKey, upstreamBody, res);
   }
 
@@ -362,6 +362,112 @@ async function handleChatCompletions(body, res) {
   }
   const json = safeParseJson(text);
   return sendJson(res, 200, anthropicToOpenAiChat(json, model));
+}
+
+function sanitizeOpenAiChatBody(body, upstreamModel) {
+  const out = {
+    model: upstreamModel,
+    messages: sanitizeOpenAiMessages(body?.messages),
+    stream: body?.stream === true,
+  };
+
+  if (body?.max_tokens != null) out.max_tokens = body.max_tokens;
+  if (body?.temperature != null) out.temperature = body.temperature;
+  if (body?.top_p != null) out.top_p = body.top_p;
+  if (body?.stop != null) out.stop = body.stop;
+
+  const tools = sanitizeOpenAiTools(body?.tools);
+  if (tools.length) {
+    out.tools = tools;
+    if (body?.tool_choice != null) out.tool_choice = body.tool_choice;
+  }
+
+  return out;
+}
+
+function sanitizeOpenAiTools(tools) {
+  if (!Array.isArray(tools)) return [];
+  return tools
+    .map((tool) => {
+      if (tool?.type === "function" && tool.function?.name) {
+        return {
+          type: "function",
+          function: {
+            name: String(tool.function.name),
+            description: tool.function.description ?? "",
+            parameters: tool.function.parameters ?? { type: "object", properties: {} },
+          },
+        };
+      }
+      if (tool?.name) {
+        return {
+          type: "function",
+          function: {
+            name: String(tool.name),
+            description: tool.description ?? "",
+            parameters: tool.input_schema ?? tool.parameters ?? { type: "object", properties: {} },
+          },
+        };
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function sanitizeOpenAiMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .map((msg) => {
+      if (!msg?.role) return null;
+      const out = { role: msg.role };
+
+      if (msg.role === "tool") {
+        out.content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
+        if (msg.tool_call_id) out.tool_call_id = msg.tool_call_id;
+        return out;
+      }
+
+      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+        out.tool_calls = msg.tool_calls
+          .map((tc) => {
+            const name = tc?.function?.name ?? tc?.name;
+            if (!name) return null;
+            const args = tc?.function?.arguments ?? tc?.arguments ?? "{}";
+            return {
+              id: tc?.id || `call_${randomUUID().slice(0, 8)}`,
+              type: "function",
+              function: {
+                name: String(name),
+                arguments: typeof args === "string" ? args : JSON.stringify(args),
+              },
+            };
+          })
+          .filter(Boolean);
+      }
+
+      if (typeof msg.content === "string") {
+        out.content = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        out.content = msg.content
+          .map((part) => {
+            if (part?.type === "text" && part.text != null) return { type: "text", text: String(part.text) };
+            if (part?.type === "image_url") return part;
+            return null;
+          })
+          .filter(Boolean);
+        if (!out.content.length) out.content = "";
+      } else if (msg.content != null) {
+        out.content = String(msg.content);
+      } else if (msg.reasoning_content) {
+        out.content = String(msg.reasoning_content);
+      } else {
+        out.content = "";
+      }
+
+      if (msg.name) out.name = msg.name;
+      return out;
+    })
+    .filter(Boolean);
 }
 
 async function fetchOpenAiChat(route, apiKey, body, res) {
