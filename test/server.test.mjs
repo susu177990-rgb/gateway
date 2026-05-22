@@ -11,6 +11,7 @@ import {
   modelEntriesForPicker,
   modelIdsForPicker,
   normalizeModel,
+  resolveGatewayModelName,
   resolveModelRoute,
   resolveRoute,
   sanitizeOpenAiChatBody,
@@ -131,8 +132,14 @@ test("claude desktop aliases are claude-prefixed and map back to configured mode
   const claudeReq = { headers: { "user-agent": "ClaudeDesktop/1.0" } };
   const claudeUrl = new URL("http://127.0.0.1/v1/models");
   const ids = modelIdsForPicker(claudeReq, claudeUrl, config);
-  assert.ok(ids.every((id) => id.startsWith("claude-gateway-")), ids.join(", "));
+  assert.ok(ids.every((id) => id.startsWith("claude")), ids.join(", "));
   assert.ok(ids.length >= 3, `expected multiple models, got ${ids.length}`);
+  assert.ok(ids.includes("claude-sonnet-4-6"));
+});
+
+test("anthropic marketing model names map to gateway default", () => {
+  assert.equal(resolveGatewayModelName("claude-sonnet-4-6", config), "model-a");
+  assert.equal(resolveGatewayModelName("claude-gateway-model-b", config), "model-b");
 });
 
 test("openai clients still receive the full configured model list", () => {

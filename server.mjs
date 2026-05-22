@@ -44,6 +44,19 @@ const STRIP_TOOLS = process.env.GATEWAY_STRIP_TOOLS === "1";
 const STRICT_TOOLS = process.env.GATEWAY_STRICT_TOOLS === "1";
 /** Claude Desktop only lists models whose id starts with claude or anthropic. Set to 0 to disable alias ids. */
 const CLAUDE_DESKTOP_ALIASES = process.env.GATEWAY_CLAUDE_ALIASES !== "0";
+/** Claude Code / Desktop often default to claude-sonnet-*; map those to Gateway default when not configured. */
+const ANTHROPIC_MARKETING_MODEL_IDS = [
+  "claude-sonnet-4-6",
+  "claude-sonnet-4-5",
+  "claude-sonnet-4",
+  "claude-opus-4-6",
+  "claude-opus-4-5",
+  "claude-opus-4",
+  "claude-haiku-4-5",
+  "claude-haiku-4",
+  "claude-3-5-sonnet-latest",
+  "claude-3-5-haiku-latest",
+];
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
@@ -342,6 +355,17 @@ function listEnabledGatewayModels(config) {
   });
 }
 
+function marketingModelEntries(config) {
+  const target = getDefaultModel(config);
+  return ANTHROPIC_MARKETING_MODEL_IDS.map((id) => ({
+    id,
+    route_id: null,
+    route_name: "gateway-default",
+    route_type: "openai-chat",
+    gateway_target_model: target,
+  }));
+}
+
 function modelEntriesForPicker(req, url, config) {
   const enabled = listEnabledGatewayModels(config);
   const fallback = getDefaultModel(config);
@@ -349,12 +373,20 @@ function modelEntriesForPicker(req, url, config) {
     ? enabled
     : [{ id: fallback, route_id: null, route_name: "gateway", route_type: "openai-chat" }];
   if (!wantsClaudeDesktopModelPicker(req, url) || !CLAUDE_DESKTOP_ALIASES) return entries;
-  return entries
+  const aliasEntries = entries
     .map((entry) => {
       const alias = claudeDesktopAliasForModel(entry.id);
       return alias ? { ...entry, id: alias, gateway_target_model: entry.id } : null;
     })
     .filter(Boolean);
+  const seen = new Set(aliasEntries.map((entry) => entry.id));
+  for (const marketing of marketingModelEntries(config)) {
+    if (!seen.has(marketing.id)) {
+      aliasEntries.push(marketing);
+      seen.add(marketing.id);
+    }
+  }
+  return aliasEntries;
 }
 
 /** @deprecated use modelEntriesForPicker in new code */
@@ -401,7 +433,7 @@ function formatModelListResponse(entries, aliasToTarget = new Map(), defaultMode
 
 async function handleMessages(body, res) {
   const config = readGatewayConfig();
-  const model = resolveClaudeDesktopModel(String(body.model || "").trim(), config) || normalizeModel(body.model, config);
+  const model = resolveGatewayModelName(body.model, config);
   const normalizedBody = { ...body, model };
 
   const anthropicResolved = resolveModelRoute(config, normalizedBody.model, "anthropic-messages");
@@ -799,9 +831,33 @@ function asArray(value) {
   return Array.isArray(value) ? value : [value];
 }
 
+function isAnthropicMarketingModel(model) {
+  const m = String(model || "").trim().toLowerCase();
+  if (!m || m.startsWith("claude-gateway-")) return false;
+  if (ANTHROPIC_MARKETING_MODEL_IDS.includes(m)) return true;
+  return (
+    m.startsWith("claude") ||
+    m.startsWith("anthropic/") ||
+    m.startsWith("anthropic-") ||
+    /\b(sonnet|opus|haiku)[-_]?\d/.test(m)
+  );
+}
+
+function resolveGatewayModelName(requestedModel, config = readGatewayConfig()) {
+  const trimmed = resolveClaudeDesktopModel(String(requestedModel || "").trim(), config);
+  if (!trimmed) return getDefaultModel(config);
+  const configured = listConfiguredModels(config);
+  if (configured.includes(trimmed) || resolveRoute(config, trimmed)) return trimmed;
+  if (isAnthropicMarketingModel(trimmed)) {
+    const fallback = getDefaultModel(config);
+    console.warn(`[gateway] model "${trimmed}" → Gateway default "${fallback}"`);
+    return fallback;
+  }
+  return trimmed;
+}
+
 function normalizeModel(model, config = readGatewayConfig()) {
-  const requested = String(model || "").trim();
-  return requested || getDefaultModel(config);
+  return resolveGatewayModelName(model, config);
 }
 
 async function streamOpenAiAsAnthropic(upstream, res, model) {
@@ -1457,7 +1513,7 @@ function resolveModelRoute(config, requestedModel, expectedType = "") {
       },
     };
   }
-  const model = explicitModel || getDefaultModel(scopedConfig);
+  const model = explicitModel ? resolveGatewayModelName(explicitModel, config) : getDefaultModel(scopedConfig);
   const route = resolveRoute(scopedConfig, model);
   if (!route && explicitModel) {
     return { status: 400, error: unknownModelError(model, config, expectedType) };
@@ -1521,7 +1577,11 @@ function buildClaudeDesktopAliasMap(config) {
 function resolveClaudeDesktopModel(model, config) {
   const trimmed = String(model || "").trim();
   if (!trimmed || !CLAUDE_DESKTOP_ALIASES) return trimmed;
-  return buildClaudeDesktopAliasMap(config).get(trimmed) || trimmed;
+  const alias = buildClaudeDesktopAliasMap(config).get(trimmed);
+  if (alias) return alias;
+  const marketing = marketingModelEntries(config).find((entry) => entry.id === trimmed);
+  if (marketing?.gateway_target_model) return marketing.gateway_target_model;
+  return trimmed;
 }
 
 function slug(value) {
@@ -1566,6 +1626,7 @@ export {
   modelEntriesForPicker,
   modelIdsForPicker,
   normalizeModel,
+  resolveGatewayModelName,
   resolveModelRoute,
   resolveModelsConfigPath,
   resolveRoute,
