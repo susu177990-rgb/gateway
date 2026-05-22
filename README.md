@@ -95,6 +95,13 @@ For other agents or OpenAI-compatible clients, standardize on **one URL** and **
 The `model` string must match a model configured under some enabled route in `models.json` (same IDs you see in the admin UI).
 If `model` is omitted, Gateway uses the Gateway-wide default model. If a non-empty unknown `model` is sent, Gateway returns `400 unknown_model` and includes the configured model list.
 
+Protocol rule:
+
+- OpenAI-compatible clients use `/v1/chat/completions` and routes with type `openai-chat`.
+- Anthropic-compatible clients use `/v1/messages` and routes with type `anthropic-messages`.
+- Gateway routes by `model` inside the same protocol type. It does not silently convert `/v1/messages` requests into OpenAI upstream calls or OpenAI chat requests into Anthropic upstream calls.
+- If a model is configured under the other protocol type, Gateway returns `400 protocol_mismatch` and tells you which endpoint to use.
+
 ### Hermes Desktop（保存路由后自动同步）
 
 Hermes 桌面应用读的是 **`~/.hermes/models.json`**，不会自动发现网关。本仓库在 **管理页保存路由**（写入 `models.json`）成功后会 **异步运行** `npm run sync:hermes` 所用的脚本，把 `GET /v1/models` 的结果写回 Hermes（保留非 `127.0.0.1:<HTTP_PORT>/v1` 的其它预设）。保存后请 **⌘Q 退出再打开 Hermes** 以刷新列表。
@@ -221,7 +228,7 @@ Zeabur 会注入 `PORT`；容器内没有本地 TLS 证书时，Gateway 自动�
 - **API Key**：`GATEWAY_API_KEY`（若已设置）
 - **模型名**：与管理页里一致
 
-连接入口路径与本地相同，例如 `POST /v1/chat/completions`、`GET /v1/models`。
+连接入口路径与本地相同。OpenAI 客户端走 `POST /v1/chat/completions`；Anthropic 客户端走 `POST /v1/messages`。管理页里的渠道「协议类型」要和客户端入口一致。
 
 ## Health and Troubleshooting
 

@@ -126,6 +126,13 @@
       <div class="card-edit card-edit-only" data-role="editBody">
         <div class="card-fields">
           <div class="field">
+            <label class="field-label">协议类型</label>
+            <select data-field="type" class="input input-select" aria-label="协议类型">
+              <option value="openai-chat">OpenAI Chat Completions</option>
+              <option value="anthropic-messages">Anthropic Messages</option>
+            </select>
+          </div>
+          <div class="field">
             <label class="field-label">请求 URL</label>
             <input data-field="baseUrl" class="input" placeholder="https://…/v1/chat/completions" aria-label="完整请求 URL" />
           </div>

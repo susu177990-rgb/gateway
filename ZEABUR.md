@@ -65,6 +65,15 @@ Gateway **默认会转发合法的 tools**（每个工具必须有 `function.nam
 GATEWAY_STRIP_TOOLS=1
 ```
 
+## OpenAI / Anthropic 入口怎么填
+
+Gateway 是按协议入口转发的，不再偷偷互转：
+
+- OpenAI 兼容项目：Base URL 填 `https://你的域名/v1`，实际走 `POST /v1/chat/completions`，渠道协议类型选 `openai-chat`
+- Anthropic 兼容项目：Base URL 填 `https://你的域名` 或按客户端要求填完整 Messages 地址，实际走 `POST /v1/messages`，渠道协议类型选 `anthropic-messages`
+
+如果模型配置在 OpenAI 渠道，但客户端走 `/v1/messages`，会返回 `protocol_mismatch`。反过来也一样。解决方式是在管理页把该模型放到对应协议类型的渠道里，或给客户端换正确入口。
+
 ## 浏览器项目接 API（CORS）
 
 若前端报 **`Failed to fetch`**，在环境变量加（或保持默认）：

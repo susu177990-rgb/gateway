@@ -113,9 +113,11 @@ function syncAllRoutesFromDom() {
     const route = routes[index];
     if (!route) return;
     const nameInput = card.querySelector('[data-field="name"]');
+    const typeInput = card.querySelector('[data-field="type"]');
     const baseUrlInput = card.querySelector('[data-field="baseUrl"]');
     const apiKeyInput = card.querySelector('[data-field="apiKey"]');
     if (nameInput) route.name = nameInput.value;
+    if (typeInput) route.type = typeInput.value;
     if (baseUrlInput) route.baseUrl = baseUrlInput.value;
     if (apiKeyInput) route.apiKey = apiKeyInput.value;
 
@@ -286,6 +288,8 @@ function renderCardView(node, route) {
 
 function syncFormFromRoute(node, route) {
   node.querySelector('[data-field="name"]').value = route.name || "";
+  const typeInput = node.querySelector('[data-field="type"]');
+  if (typeInput) typeInput.value = route.type === "anthropic-messages" ? "anthropic-messages" : "openai-chat";
   node.querySelector('[data-field="baseUrl"]').value = route.baseUrl || "";
   const apiKeyInput = node.querySelector('[data-field="apiKey"]');
   apiKeyInput.value = route.apiKey || "";
@@ -419,11 +423,16 @@ function bindRoute(node, route, index) {
   });
 
   const nameInput = node.querySelector('[data-field="name"]');
+  const typeInput = node.querySelector('[data-field="type"]');
   const baseUrlInput = node.querySelector('[data-field="baseUrl"]');
   const apiKeyInput = node.querySelector('[data-field="apiKey"]');
 
   nameInput.addEventListener("input", () => {
     route.name = nameInput.value;
+    onFieldEdit();
+  });
+  typeInput?.addEventListener("change", () => {
+    route.type = typeInput.value;
     onFieldEdit();
   });
   baseUrlInput.addEventListener("input", () => {
@@ -435,7 +444,7 @@ function bindRoute(node, route, index) {
     onFieldEdit();
   });
 
-  route.type = "openai-chat";
+  route.type = route.type === "anthropic-messages" ? "anthropic-messages" : "openai-chat";
   normalizeRouteModels(route);
   bindModels(node, route, index, onFieldEdit);
 

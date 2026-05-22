@@ -321,7 +321,7 @@ async function handleModels(res) {
 
 async function handleMessages(body, res) {
   const config = readGatewayConfig();
-  const resolved = resolveModelRoute(config, body.model);
+  const resolved = resolveModelRoute(config, body.model, "anthropic-messages");
   if (resolved.error) return sendJson(res, resolved.status, resolved.error);
   const { route, model } = resolved;
   const upstreamModel = toUpstreamModel(model, route);
@@ -333,73 +333,13 @@ async function handleMessages(body, res) {
     });
   }
 
-  if (route.type === "anthropic-messages") {
-    const upstreamBody = { ...body, model: upstreamModel };
-    return fetchAnthropicMessages(route, apiKey, upstreamBody, res);
-  }
-
-  const toolError = validateIncomingTools(body?.tools);
-  if (toolError) {
-    return sendJson(res, 400, { error: toolError });
-  }
-  warnDroppedTools(body?.tools);
-  const openaiBody = anthropicMessagesToOpenAiChatBody(body, upstreamModel);
-
-  const upstream = await fetch(upstreamUrl(route), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(openaiBody),
-  });
-
-  if (!upstream.ok) {
-    return sendJson(res, upstream.status, normalizeError(await upstream.text(), upstream.status));
-  }
-
-  if (!openaiBody.stream) {
-    const json = await upstream.json();
-    return sendJson(res, 200, openAiToAnthropicMessage(json, model));
-  }
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-  });
-
-  await streamOpenAiAsAnthropic(upstream, res, model);
-}
-
-function anthropicMessagesToOpenAiChatBody(body, upstreamModel) {
-  const openaiBody = {
-    model: upstreamModel,
-    messages: convertMessages(body),
-    max_tokens: body.max_tokens ?? 4096,
-    temperature: body.temperature,
-    top_p: body.top_p,
-    stream: body.stream !== false,
-  };
-
-  if (!STRIP_TOOLS) {
-    const tools = sanitizeOpenAiTools(body?.tools);
-    if (tools.length) {
-      openaiBody.tools = tools;
-      openaiBody.tool_choice = "auto";
-    }
-  }
-
-  for (const key of Object.keys(openaiBody)) {
-    if (openaiBody[key] === undefined) delete openaiBody[key];
-  }
-
-  return openaiBody;
+  const upstreamBody = { ...body, model: upstreamModel };
+  return fetchAnthropicMessages(route, apiKey, upstreamBody, res);
 }
 
 async function handleChatCompletions(body, res) {
   const config = readGatewayConfig();
-  const resolved = resolveModelRoute(config, body.model);
+  const resolved = resolveModelRoute(config, body.model, "openai-chat");
   if (resolved.error) return sendJson(res, resolved.status, resolved.error);
   const { route, model } = resolved;
   const upstreamModel = toUpstreamModel(model, route);
@@ -410,32 +350,13 @@ async function handleChatCompletions(body, res) {
     });
   }
 
-  if (route.type === "openai-chat") {
-    const toolError = validateIncomingTools(body?.tools);
-    if (toolError) {
-      return sendJson(res, 400, { error: toolError });
-    }
-    warnDroppedTools(body?.tools);
-    const upstreamBody = sanitizeOpenAiChatBody(body, upstreamModel);
-    return fetchOpenAiChat(route, apiKey, upstreamBody, res);
+  const toolError = validateIncomingTools(body?.tools);
+  if (toolError) {
+    return sendJson(res, 400, { error: toolError });
   }
-
-  const anthropicBody = openAiChatToAnthropicMessage({ ...body, model: upstreamModel });
-  const upstream = await fetch(upstreamUrl(route), {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(anthropicBody),
-  });
-  const text = await upstream.text();
-  if (!upstream.ok) {
-    return sendJson(res, upstream.status, normalizeOpenAiError(text, upstream.status));
-  }
-  const json = safeParseJson(text);
-  return sendJson(res, 200, anthropicToOpenAiChat(json, model));
+  warnDroppedTools(body?.tools);
+  const upstreamBody = sanitizeOpenAiChatBody(body, upstreamModel);
+  return fetchOpenAiChat(route, apiKey, upstreamBody, res);
 }
 
 function sanitizeOpenAiChatBody(body, upstreamModel) {
@@ -1329,8 +1250,43 @@ function redactConfig(config) {
   };
 }
 
-function unknownModelError(model, config) {
+function routeTypeLabel(type) {
+  return type === "anthropic-messages" ? "Anthropic Messages" : "OpenAI Chat Completions";
+}
+
+function entrypointForRouteType(type) {
+  return type === "anthropic-messages" ? "/v1/messages" : "/v1/chat/completions";
+}
+
+function unknownModelError(model, config, expectedType = "") {
   const availableModels = listConfiguredModels(config);
+  const protocolModels = expectedType
+    ? listConfiguredModels({ ...config, routes: config.routes.filter((route) => route.type === expectedType) })
+    : availableModels;
+  const otherRoute = expectedType
+    ? config.routes.find(
+        (route) =>
+          route.enabled !== false &&
+          route.type !== expectedType &&
+          (route.models || []).includes(model),
+      )
+    : null;
+  if (otherRoute) {
+    return {
+      error: {
+        type: "invalid_request_error",
+        code: "protocol_mismatch",
+        message:
+          `模型「${model}」配置在「${routeTypeLabel(otherRoute.type)}」渠道，但当前 URL 是「${routeTypeLabel(expectedType)}」入口。` +
+          `请让客户端使用 ${entrypointForRouteType(otherRoute.type)}，或在管理页给这个模型新增一个「${routeTypeLabel(expectedType)}」渠道。`,
+        model,
+        configured_route_type: otherRoute.type,
+        expected_route_type: expectedType,
+        correct_entrypoint: entrypointForRouteType(otherRoute.type),
+        available_models: protocolModels,
+      },
+    };
+  }
   return {
     error: {
       type: "invalid_request_error",
@@ -1339,22 +1295,38 @@ function unknownModelError(model, config) {
         `模型「${model}」没有配置到任何启用渠道。` +
         "请在管理页添加该模型，或把请求里的 model 改成已配置模型。",
       model,
-      available_models: availableModels,
+      available_models: protocolModels,
       admin_hint: "打开 Gateway 管理页，在对应渠道的模型列表里添加这个模型 ID。",
     },
   };
 }
 
-function resolveModelRoute(config, requestedModel) {
+function resolveModelRoute(config, requestedModel, expectedType = "") {
   const explicitModel = String(requestedModel || "").trim();
-  const model = normalizeModel(explicitModel, config);
-  const route = resolveRoute(config, model);
+  const scopedConfig = expectedType
+    ? { ...config, routes: config.routes.filter((route) => route.type === expectedType) }
+    : config;
+  if (expectedType && !scopedConfig.routes.some((route) => route.enabled !== false)) {
+    return {
+      status: 400,
+      error: {
+        error: {
+          type: "invalid_request_error",
+          code: "no_route_for_protocol",
+          message: `当前没有启用的「${routeTypeLabel(expectedType)}」渠道，请在管理页新增或启用对应协议的渠道。`,
+          expected_route_type: expectedType,
+        },
+      },
+    };
+  }
+  const model = explicitModel || getDefaultModel(scopedConfig);
+  const route = resolveRoute(scopedConfig, model);
   if (!route && explicitModel) {
-    return { status: 400, error: unknownModelError(model, config) };
+    return { status: 400, error: unknownModelError(model, config, expectedType) };
   }
   if (!route) {
     return {
-      route: config.routes.filter((item) => item.enabled !== false)[0] || defaultConfig().routes[0],
+      route: scopedConfig.routes.filter((item) => item.enabled !== false)[0] || defaultConfig().routes[0],
       model,
     };
   }
@@ -1433,7 +1405,6 @@ export {
   configIsPersistent,
   configPathLabel,
   getDefaultModel,
-  anthropicMessagesToOpenAiChatBody,
   listConfiguredModels,
   normalizeModel,
   resolveModelRoute,

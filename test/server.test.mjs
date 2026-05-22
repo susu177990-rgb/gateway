@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   CONFIG_FILE,
-  anthropicMessagesToOpenAiChatBody,
   getDefaultModel,
   listConfiguredModels,
   normalizeModel,
@@ -36,6 +35,16 @@ const config = {
       defaultModel: "model-c",
       models: ["model-c"],
     },
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      type: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1/messages",
+      apiKey: "anthropic-key",
+      enabled: true,
+      defaultModel: "claude-test",
+      models: ["claude-test"],
+    },
   ],
 };
 
@@ -57,16 +66,29 @@ test("configured model routes to its owning provider", () => {
 });
 
 test("unknown explicit model returns a 400 routing error", () => {
-  const resolved = resolveModelRoute(config, "missing-model");
+  const resolved = resolveModelRoute(config, "missing-model", "openai-chat");
   assert.equal(resolved.status, 400);
   assert.equal(resolved.error.error.code, "unknown_model");
   assert.deepEqual(resolved.error.error.available_models, ["model-a", "model-b", "model-c"]);
 });
 
+test("route resolution is scoped by requested protocol", () => {
+  assert.equal(resolveModelRoute(config, "model-c", "openai-chat").route.id, "beta");
+  assert.equal(resolveModelRoute(config, "claude-test", "anthropic-messages").route.id, "anthropic");
+});
+
+test("using the wrong protocol returns a protocol mismatch", () => {
+  const resolved = resolveModelRoute(config, "model-c", "anthropic-messages");
+  assert.equal(resolved.status, 400);
+  assert.equal(resolved.error.error.code, "protocol_mismatch");
+  assert.equal(resolved.error.error.configured_route_type, "openai-chat");
+  assert.equal(resolved.error.error.expected_route_type, "anthropic-messages");
+});
+
 test("model helpers expose configured defaults and enabled model list", () => {
   assert.equal(getDefaultModel(config), "model-a");
   assert.equal(normalizeModel(undefined, config), "model-a");
-  assert.deepEqual(listConfiguredModels(config), ["model-a", "model-b", "model-c"]);
+  assert.deepEqual(listConfiguredModels(config), ["model-a", "model-b", "model-c", "claude-test"]);
 });
 
 test("tools are sanitized by keeping only usable function names", () => {
@@ -108,41 +130,4 @@ test("chat body forwards common OpenAI fields and drops empty tools", () => {
   assert.equal(body.tools.length, 1);
   assert.equal(body.tools[0].function.name, "lookup");
   assert.equal(body.tool_choice, "auto");
-});
-
-test("anthropic messages bridge drops empty tools before OpenAI upstream", () => {
-  const body = anthropicMessagesToOpenAiChatBody(
-    {
-      messages: [{ role: "user", content: "hi" }],
-      tools: [
-        { description: "", parameters: { type: "object", properties: {} } },
-        { description: "", parameters: { type: "object", properties: {} } },
-        { name: "real_tool", description: "Real tool", input_schema: { type: "object", properties: {} } },
-      ],
-      stream: false,
-    },
-    "upstream-model",
-  );
-
-  assert.equal(body.model, "upstream-model");
-  assert.equal(body.stream, false);
-  assert.equal(body.tools.length, 1);
-  assert.equal(body.tools[0].function.name, "real_tool");
-});
-
-test("anthropic messages bridge omits tools when every tool is empty", () => {
-  const body = anthropicMessagesToOpenAiChatBody(
-    {
-      messages: [{ role: "user", content: "hi" }],
-      tools: Array.from({ length: 5 }, () => ({
-        description: "",
-        parameters: { type: "object", properties: {} },
-      })),
-      stream: false,
-    },
-    "upstream-model",
-  );
-
-  assert.equal("tools" in body, false);
-  assert.equal("tool_choice" in body, false);
 });
