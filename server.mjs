@@ -401,8 +401,33 @@ function formatModelListResponse(entries, aliasToTarget = new Map(), defaultMode
 
 async function handleMessages(body, res) {
   const config = readGatewayConfig();
-  const resolved = resolveModelRoute(config, body.model, "anthropic-messages");
-  if (resolved.error) return sendJson(res, resolved.status, resolved.error);
+  const model = resolveClaudeDesktopModel(String(body.model || "").trim(), config) || normalizeModel(body.model, config);
+  const normalizedBody = { ...body, model };
+
+  const anthropicResolved = resolveModelRoute(config, normalizedBody.model, "anthropic-messages");
+  if (!anthropicResolved.error) {
+    const { route, model: routeModel } = anthropicResolved;
+    const upstreamModel = toUpstreamModel(routeModel, route);
+    const apiKey = resolveRouteApiKey(route);
+    if (!apiKey) {
+      return sendJson(res, 401, {
+        type: "error",
+        error: { type: "authentication_error", message: `No API key configured for route ${route.id}` },
+      });
+    }
+    const upstreamBody = { ...normalizedBody, model: upstreamModel };
+    return fetchAnthropicMessages(route, apiKey, upstreamBody, res);
+  }
+
+  const openaiResolved = resolveModelRoute(config, normalizedBody.model, "openai-chat");
+  if (!openaiResolved.error) {
+    return handleMessagesViaOpenAiBridge(normalizedBody, res, openaiResolved);
+  }
+
+  return sendJson(res, anthropicResolved.status, anthropicResolved.error);
+}
+
+async function handleMessagesViaOpenAiBridge(body, res, resolved) {
   const { route, model } = resolved;
   const upstreamModel = toUpstreamModel(model, route);
   const apiKey = resolveRouteApiKey(route);
@@ -413,8 +438,41 @@ async function handleMessages(body, res) {
     });
   }
 
-  const upstreamBody = { ...body, model: upstreamModel };
-  return fetchAnthropicMessages(route, apiKey, upstreamBody, res);
+  const openaiBody = {
+    model: upstreamModel,
+    messages: convertMessages(body),
+    max_tokens: body.max_tokens ?? 4096,
+    temperature: body.temperature,
+    top_p: body.top_p,
+    stream: body.stream !== false,
+  };
+
+  const upstream = await fetch(upstreamUrl(route), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(openaiBody),
+  });
+
+  if (!upstream.ok) {
+    return sendJson(res, upstream.status, normalizeError(await upstream.text(), upstream.status));
+  }
+
+  const displayModel = body.model || model;
+
+  if (openaiBody.stream) {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+    return streamOpenAiAsAnthropic(upstream, res, displayModel);
+  }
+
+  const json = await upstream.json();
+  return sendJson(res, 200, openAiToAnthropicMessage(json, displayModel));
 }
 
 async function handleChatCompletions(body, res) {

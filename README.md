@@ -102,6 +102,8 @@ For other agents or OpenAI-compatible clients, standardize on **one URL** and **
 
 Claude Desktop 因客户端过滤，会对 Claude 请求返回 `claude-gateway-*` 别名（仍对应同一份 Gateway 配置，不是上游目录）。
 
+Claude Desktop 发的是 **`POST /v1/messages`**，而 NVIDIA 等渠道是 **OpenAI Chat**。Gateway 会自动把 Messages 转成 OpenAI 再转发（无需单独建 Anthropic 渠道）。
+
 The `model` string must match a model configured under some enabled route in `models.json` (same IDs you see in the admin UI).
 If `model` is omitted, Gateway uses the Gateway-wide default model. If a non-empty unknown `model` is sent, Gateway returns `400 unknown_model` and includes the configured model list.
 
