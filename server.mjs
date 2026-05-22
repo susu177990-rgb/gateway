@@ -338,30 +338,12 @@ async function handleMessages(body, res) {
     return fetchAnthropicMessages(route, apiKey, upstreamBody, res);
   }
 
-  const openaiBody = {
-    model: upstreamModel,
-    messages: convertMessages(body),
-    max_tokens: body.max_tokens ?? 4096,
-    temperature: body.temperature,
-    top_p: body.top_p,
-    stream: body.stream !== false,
-  };
-
-  if (Array.isArray(body.tools) && body.tools.length) {
-    openaiBody.tools = body.tools.map((tool) => ({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: tool.description || "",
-        parameters: tool.input_schema || { type: "object", properties: {} },
-      },
-    }));
-    openaiBody.tool_choice = "auto";
+  const toolError = validateIncomingTools(body?.tools);
+  if (toolError) {
+    return sendJson(res, 400, { error: toolError });
   }
-
-  for (const key of Object.keys(openaiBody)) {
-    if (openaiBody[key] === undefined) delete openaiBody[key];
-  }
+  warnDroppedTools(body?.tools);
+  const openaiBody = anthropicMessagesToOpenAiChatBody(body, upstreamModel);
 
   const upstream = await fetch(upstreamUrl(route), {
     method: "POST",
@@ -388,6 +370,31 @@ async function handleMessages(body, res) {
   });
 
   await streamOpenAiAsAnthropic(upstream, res, model);
+}
+
+function anthropicMessagesToOpenAiChatBody(body, upstreamModel) {
+  const openaiBody = {
+    model: upstreamModel,
+    messages: convertMessages(body),
+    max_tokens: body.max_tokens ?? 4096,
+    temperature: body.temperature,
+    top_p: body.top_p,
+    stream: body.stream !== false,
+  };
+
+  if (!STRIP_TOOLS) {
+    const tools = sanitizeOpenAiTools(body?.tools);
+    if (tools.length) {
+      openaiBody.tools = tools;
+      openaiBody.tool_choice = "auto";
+    }
+  }
+
+  for (const key of Object.keys(openaiBody)) {
+    if (openaiBody[key] === undefined) delete openaiBody[key];
+  }
+
+  return openaiBody;
 }
 
 async function handleChatCompletions(body, res) {
@@ -1426,6 +1433,7 @@ export {
   configIsPersistent,
   configPathLabel,
   getDefaultModel,
+  anthropicMessagesToOpenAiChatBody,
   listConfiguredModels,
   normalizeModel,
   resolveModelRoute,

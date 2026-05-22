@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   CONFIG_FILE,
+  anthropicMessagesToOpenAiChatBody,
   getDefaultModel,
   listConfiguredModels,
   normalizeModel,
@@ -107,4 +108,41 @@ test("chat body forwards common OpenAI fields and drops empty tools", () => {
   assert.equal(body.tools.length, 1);
   assert.equal(body.tools[0].function.name, "lookup");
   assert.equal(body.tool_choice, "auto");
+});
+
+test("anthropic messages bridge drops empty tools before OpenAI upstream", () => {
+  const body = anthropicMessagesToOpenAiChatBody(
+    {
+      messages: [{ role: "user", content: "hi" }],
+      tools: [
+        { description: "", parameters: { type: "object", properties: {} } },
+        { description: "", parameters: { type: "object", properties: {} } },
+        { name: "real_tool", description: "Real tool", input_schema: { type: "object", properties: {} } },
+      ],
+      stream: false,
+    },
+    "upstream-model",
+  );
+
+  assert.equal(body.model, "upstream-model");
+  assert.equal(body.stream, false);
+  assert.equal(body.tools.length, 1);
+  assert.equal(body.tools[0].function.name, "real_tool");
+});
+
+test("anthropic messages bridge omits tools when every tool is empty", () => {
+  const body = anthropicMessagesToOpenAiChatBody(
+    {
+      messages: [{ role: "user", content: "hi" }],
+      tools: Array.from({ length: 5 }, () => ({
+        description: "",
+        parameters: { type: "object", properties: {} },
+      })),
+      stream: false,
+    },
+    "upstream-model",
+  );
+
+  assert.equal("tools" in body, false);
+  assert.equal("tool_choice" in body, false);
 });
