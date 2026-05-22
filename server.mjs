@@ -306,17 +306,25 @@ async function route(req, res, base = PUBLIC_BASE) {
 
 async function handleModels(res) {
   const unique = listConfiguredModels(readGatewayConfig());
-  sendJson(res, 200, {
-    data: unique.map((id) => ({
+  sendJson(res, 200, formatModelListResponse(unique));
+}
+
+function formatModelListResponse(modelIds) {
+  return {
+    object: "list",
+    data: modelIds.map((id) => ({
       id,
+      object: "model",
       type: "model",
       display_name: id,
+      owned_by: "gateway",
       created_at: "2026-01-01T00:00:00Z",
+      created: 1767225600,
     })),
-    first_id: unique[0],
+    first_id: modelIds[0],
     has_more: false,
-    last_id: unique.at(-1),
-  });
+    last_id: modelIds.at(-1),
+  };
 }
 
 async function handleMessages(body, res) {
@@ -1404,6 +1412,7 @@ export {
   HTTP_ONLY,
   configIsPersistent,
   configPathLabel,
+  formatModelListResponse,
   getDefaultModel,
   listConfiguredModels,
   normalizeModel,

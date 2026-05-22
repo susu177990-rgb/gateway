@@ -206,6 +206,7 @@ load();
 function listAllModelIds() {
   const ids = new Set();
   for (const route of routes) {
+    if (route.enabled === false) continue;
     for (const model of route.models || []) {
       const id = String(model).trim();
       if (id) ids.add(id);

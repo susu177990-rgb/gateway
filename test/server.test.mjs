@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   CONFIG_FILE,
   getDefaultModel,
+  formatModelListResponse,
   listConfiguredModels,
   normalizeModel,
   resolveModelRoute,
@@ -89,6 +90,16 @@ test("model helpers expose configured defaults and enabled model list", () => {
   assert.equal(getDefaultModel(config), "model-a");
   assert.equal(normalizeModel(undefined, config), "model-a");
   assert.deepEqual(listConfiguredModels(config), ["model-a", "model-b", "model-c", "claude-test"]);
+});
+
+test("model list response is OpenAI-compatible", () => {
+  const body = formatModelListResponse(["model-a", "model-b"]);
+  assert.equal(body.object, "list");
+  assert.equal(body.data[0].object, "model");
+  assert.equal(body.data[0].id, "model-a");
+  assert.equal(body.data[0].owned_by, "gateway");
+  assert.equal(body.first_id, "model-a");
+  assert.equal(body.last_id, "model-b");
 });
 
 test("tools are sanitized by keeping only usable function names", () => {
