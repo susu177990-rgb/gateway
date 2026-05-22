@@ -112,14 +112,16 @@ function syncAllRoutesFromDom() {
   routesEl.querySelectorAll(".card").forEach((card, index) => {
     const route = routes[index];
     if (!route) return;
-    const nameInput = card.querySelector('[data-field="name"]');
-    const typeInput = card.querySelector('[data-field="type"]');
-    const baseUrlInput = card.querySelector('[data-field="baseUrl"]');
-    const apiKeyInput = card.querySelector('[data-field="apiKey"]');
-    if (nameInput) route.name = nameInput.value;
-    if (typeInput) route.type = typeInput.value;
-    if (baseUrlInput) route.baseUrl = baseUrlInput.value;
-    if (apiKeyInput) route.apiKey = apiKeyInput.value;
+    if (isRouteEditing(route, index) || card.classList.contains("card--editing")) {
+      const nameInput = card.querySelector('[data-field="name"]');
+      const typeInput = card.querySelector('[data-field="type"]');
+      const baseUrlInput = card.querySelector('[data-field="baseUrl"]');
+      const apiKeyInput = card.querySelector('[data-field="apiKey"]');
+      if (nameInput) route.name = nameInput.value;
+      if (typeInput) route.type = typeInput.value;
+      if (baseUrlInput) route.baseUrl = baseUrlInput.value;
+      if (apiKeyInput) route.apiKey = apiKeyInput.value;
+    }
 
     const modelInputs = card.querySelectorAll('[data-role="model-name"]');
     if (modelInputs.length) {
@@ -426,6 +428,7 @@ function bindRoute(node, route, index) {
   const typeInput = node.querySelector('[data-field="type"]');
   const baseUrlInput = node.querySelector('[data-field="baseUrl"]');
   const apiKeyInput = node.querySelector('[data-field="apiKey"]');
+  syncFormFromRoute(node, route);
 
   nameInput.addEventListener("input", () => {
     route.name = nameInput.value;
