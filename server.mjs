@@ -269,9 +269,10 @@ async function route(req, res, base = PUBLIC_BASE) {
         accepts: ["Authorization: Bearer <GATEWAY_API_KEY>", "x-api-key: <GATEWAY_API_KEY>"],
       },
       models: listConfiguredModels(config),
+      modelListSource: "gateway_enabled_routes",
       modelListUrl: `${PUBLIC_BASE}/v1/models`,
       claudeModelListHint:
-        "Claude Desktop: leave inferenceModels empty, base URL without /v1, API key required. Picker uses claude-gateway-* ids from /v1/models.",
+        "GET /v1/models lists enabled models from Gateway config only (not upstream providers). Claude Desktop: leave inferenceModels empty.",
     });
   }
 
@@ -316,37 +317,85 @@ function wantsClaudeDesktopModelPicker(req, url) {
   return ua.includes("claude") || ua.includes("anthropic");
 }
 
+function listEnabledGatewayModels(config) {
+  const routes = config.routes.filter((route) => route.enabled !== false);
+  const items = [];
+  for (const route of routes) {
+    const modelLines = (route.models || []).map((model) => String(model).trim()).filter(Boolean);
+    const models = modelLines.length
+      ? modelLines
+      : [String(route.defaultModel || "").trim()].filter(Boolean);
+    for (const id of models) {
+      items.push({
+        id,
+        route_id: route.id,
+        route_name: route.name || route.id,
+        route_type: route.type || "openai-chat",
+      });
+    }
+  }
+  const seen = new Set();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
+function modelEntriesForPicker(req, url, config) {
+  const enabled = listEnabledGatewayModels(config);
+  const fallback = getDefaultModel(config);
+  const entries = enabled.length
+    ? enabled
+    : [{ id: fallback, route_id: null, route_name: "gateway", route_type: "openai-chat" }];
+  if (!wantsClaudeDesktopModelPicker(req, url) || !CLAUDE_DESKTOP_ALIASES) return entries;
+  return entries
+    .map((entry) => {
+      const alias = claudeDesktopAliasForModel(entry.id);
+      return alias ? { ...entry, id: alias, gateway_target_model: entry.id } : null;
+    })
+    .filter(Boolean);
+}
+
+/** @deprecated use modelEntriesForPicker in new code */
 function modelIdsForPicker(req, url, config) {
-  const unique = listConfiguredModels(config);
-  const aliases = CLAUDE_DESKTOP_ALIASES
-    ? unique.map((id) => claudeDesktopAliasForModel(id)).filter(Boolean)
-    : [];
-  if (wantsClaudeDesktopModelPicker(req, url)) return aliases.length ? aliases : unique;
-  return unique;
+  return modelEntriesForPicker(req, url, config).map((entry) => entry.id);
 }
 
 async function handleModels(req, res, url) {
   const config = readGatewayConfig();
   const aliasMap = buildClaudeDesktopAliasMap(config);
-  const ids = modelIdsForPicker(req, url, config);
-  sendJson(res, 200, formatModelListResponse(ids, aliasMap));
+  const entries = modelEntriesForPicker(req, url, config);
+  sendJson(res, 200, formatModelListResponse(entries, aliasMap, getDefaultModel(config)));
 }
 
-function formatModelListResponse(modelIds, aliasToTarget = new Map()) {
-  return {
-    object: "list",
-    data: modelIds.map((id) => ({
+function formatModelListResponse(entries, aliasToTarget = new Map(), defaultModel = "") {
+  const rows = entries.map((entry) => {
+    const id = typeof entry === "string" ? entry : entry.id;
+    const meta = typeof entry === "object" && entry ? entry : {};
+    const target = aliasToTarget.get(id) || meta.gateway_target_model || null;
+    return {
       id,
       object: "model",
       type: "model",
-      display_name: aliasToTarget.has(id) ? `${id} → ${aliasToTarget.get(id)}` : id,
+      display_name: target ? `${id} → ${target}` : id,
       owned_by: "gateway",
+      gateway_route_id: meta.route_id ?? null,
+      gateway_route_name: meta.route_name ?? null,
+      gateway_route_type: meta.route_type ?? null,
+      gateway_target_model: target,
       created_at: "2026-01-01T00:00:00Z",
       created: 1767225600,
-    })),
-    first_id: modelIds[0],
+    };
+  });
+  return {
+    object: "list",
+    source: "gateway_enabled_routes",
+    default_model: defaultModel || rows[0]?.id || null,
+    data: rows,
+    first_id: rows[0]?.id,
     has_more: false,
-    last_id: modelIds.at(-1),
+    last_id: rows.at(-1)?.id,
   };
 }
 
@@ -1393,12 +1442,8 @@ function getDefaultModel(config) {
 }
 
 function listConfiguredModels(config) {
-  const routes = config.routes.filter((route) => route.enabled !== false);
-  const models = [];
-  for (const route of routes) {
-    for (const model of route.models || []) models.push(model);
-  }
-  return [...new Set(models.length ? models : [getDefaultModel(config)])];
+  const ids = listEnabledGatewayModels(config).map((entry) => entry.id);
+  return [...new Set(ids.length ? ids : [getDefaultModel(config)])];
 }
 
 function claudeDesktopAliasForModel(modelId) {
@@ -1459,6 +1504,8 @@ export {
   formatModelListResponse,
   getDefaultModel,
   listConfiguredModels,
+  listEnabledGatewayModels,
+  modelEntriesForPicker,
   modelIdsForPicker,
   normalizeModel,
   resolveModelRoute,

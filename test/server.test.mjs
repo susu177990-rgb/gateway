@@ -7,6 +7,8 @@ import {
   getDefaultModel,
   formatModelListResponse,
   listConfiguredModels,
+  listEnabledGatewayModels,
+  modelEntriesForPicker,
   modelIdsForPicker,
   normalizeModel,
   resolveModelRoute,
@@ -94,11 +96,30 @@ test("model helpers expose configured defaults and enabled model list", () => {
   assert.deepEqual(listConfiguredModels(config), ["model-a", "model-b", "model-c", "claude-test"]);
 });
 
-test("model list response is OpenAI-compatible", () => {
-  const body = formatModelListResponse(["model-a", "model-b"]);
+test("enabled gateway models come only from enabled routes in config", () => {
+  const enabled = listEnabledGatewayModels(config);
+  assert.deepEqual(
+    enabled.map((entry) => entry.id),
+    ["model-a", "model-b", "model-c", "claude-test"],
+  );
+  assert.equal(enabled.find((entry) => entry.id === "model-c")?.route_id, "beta");
+});
+
+test("model list response is OpenAI-compatible and tagged as gateway config", () => {
+  const body = formatModelListResponse(
+    [
+      { id: "model-a", route_id: "alpha", route_name: "Alpha", route_type: "openai-chat" },
+      { id: "model-b", route_id: "alpha", route_name: "Alpha", route_type: "openai-chat" },
+    ],
+    new Map(),
+    "model-a",
+  );
   assert.equal(body.object, "list");
+  assert.equal(body.source, "gateway_enabled_routes");
+  assert.equal(body.default_model, "model-a");
   assert.equal(body.data[0].object, "model");
   assert.equal(body.data[0].id, "model-a");
+  assert.equal(body.data[0].gateway_route_id, "alpha");
   assert.equal(body.data[0].owned_by, "gateway");
   assert.equal(body.first_id, "model-a");
   assert.equal(body.last_id, "model-b");

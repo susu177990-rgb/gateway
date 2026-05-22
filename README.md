@@ -92,6 +92,16 @@ For other agents or OpenAI-compatible clients, standardize on **one URL** and **
 - **Body:** same as OpenAI Chat Completions (`model`, `messages`, optional `stream`, `temperature`, …)
 - **Model list:** `GET http://127.0.0.1:7080/v1/models`
 
+### 模型列表从哪来（重要）
+
+`GET /v1/models` **只返回 Gateway 管理页里「已启用」渠道下配置的模型 ID**（读 `models.json` / `/data/models.json`），**不会**向 NVIDIA、Google 等上游请求 `GET /models` 做自动发现。
+
+- 在管理页**启用渠道**并把模型 ID 写进该渠道的模型列表 → 客户端拉列表时才会出现  
+- `defaultModel` 仅表示「请求里没写 `model` 时用哪个」，**不是**列表里唯一的一项  
+- 响应里 `source` 为 `gateway_enabled_routes`；每条可带 `gateway_route_id` / `gateway_route_name` 标明来自哪个渠道  
+
+Claude Desktop 因客户端过滤，会对 Claude 请求返回 `claude-gateway-*` 别名（仍对应同一份 Gateway 配置，不是上游目录）。
+
 The `model` string must match a model configured under some enabled route in `models.json` (same IDs you see in the admin UI).
 If `model` is omitted, Gateway uses the Gateway-wide default model. If a non-empty unknown `model` is sent, Gateway returns `400 unknown_model` and includes the configured model list.
 
