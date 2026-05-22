@@ -42,6 +42,8 @@ const CORS_ORIGIN = (process.env.CORS_ORIGIN || "*").trim() || "*";
 const STRIP_TOOLS = process.env.GATEWAY_STRIP_TOOLS === "1";
 /** Set GATEWAY_STRICT_TOOLS=1 to reject chat when every tool lacks function.name. */
 const STRICT_TOOLS = process.env.GATEWAY_STRICT_TOOLS === "1";
+/** Claude Desktop only lists models whose id starts with claude or anthropic. Set to 0 to disable alias ids. */
+const CLAUDE_DESKTOP_ALIASES = process.env.GATEWAY_CLAUDE_ALIASES !== "0";
 const UPSTREAM_BASE = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1/chat/completions").replace(/\/$/, "");
 const localNvidiaProfile = readLocalNvidiaProfile();
 const DEFAULT_MODEL = process.env.NVIDIA_MODEL || localNvidiaProfile.model || "minimaxai/minimax-m2.7";
@@ -267,6 +269,9 @@ async function route(req, res, base = PUBLIC_BASE) {
         accepts: ["Authorization: Bearer <GATEWAY_API_KEY>", "x-api-key: <GATEWAY_API_KEY>"],
       },
       models: listConfiguredModels(config),
+      modelListUrl: `${PUBLIC_BASE}/v1/models`,
+      claudeModelListHint:
+        "Claude Desktop: leave inferenceModels empty, base URL without /v1, API key required. Picker uses claude-gateway-* ids from /v1/models.",
     });
   }
 
@@ -284,8 +289,8 @@ async function route(req, res, base = PUBLIC_BASE) {
     return handleAdminTest(body, res);
   }
 
-  if (req.method === "GET" && url.pathname === "/v1/models") {
-    return handleModels(res);
+  if (req.method === "GET" && (url.pathname === "/v1/models" || url.pathname === "/models")) {
+    return handleModels(req, res, url);
   }
 
   if (req.method === "POST" && url.pathname === "/v1/messages") {
@@ -304,19 +309,37 @@ async function route(req, res, base = PUBLIC_BASE) {
   sendJson(res, 404, { type: "error", error: { type: "not_found_error", message: "Not found" } });
 }
 
-async function handleModels(res) {
-  const unique = listConfiguredModels(readGatewayConfig());
-  sendJson(res, 200, formatModelListResponse(unique));
+function wantsClaudeDesktopModelPicker(req, url) {
+  const discover = url.searchParams.get("discover") || url.searchParams.get("picker") || "";
+  if (/^claude/i.test(discover)) return true;
+  const ua = String(req.headers["user-agent"] || "").toLowerCase();
+  return ua.includes("claude") || ua.includes("anthropic");
 }
 
-function formatModelListResponse(modelIds) {
+function modelIdsForPicker(req, url, config) {
+  const unique = listConfiguredModels(config);
+  const aliases = CLAUDE_DESKTOP_ALIASES
+    ? unique.map((id) => claudeDesktopAliasForModel(id)).filter(Boolean)
+    : [];
+  if (wantsClaudeDesktopModelPicker(req, url)) return aliases.length ? aliases : unique;
+  return unique;
+}
+
+async function handleModels(req, res, url) {
+  const config = readGatewayConfig();
+  const aliasMap = buildClaudeDesktopAliasMap(config);
+  const ids = modelIdsForPicker(req, url, config);
+  sendJson(res, 200, formatModelListResponse(ids, aliasMap));
+}
+
+function formatModelListResponse(modelIds, aliasToTarget = new Map()) {
   return {
     object: "list",
     data: modelIds.map((id) => ({
       id,
       object: "model",
       type: "model",
-      display_name: id,
+      display_name: aliasToTarget.has(id) ? `${id} → ${aliasToTarget.get(id)}` : id,
       owned_by: "gateway",
       created_at: "2026-01-01T00:00:00Z",
       created: 1767225600,
@@ -1344,7 +1367,7 @@ function resolveModelRoute(config, requestedModel, expectedType = "") {
 function resolveRoute(config, requestedModel) {
   const routes = config.routes.filter((route) => route.enabled !== false);
   if (!routes.length) return null;
-  const model = String(requestedModel || "").trim();
+  const model = resolveClaudeDesktopModel(String(requestedModel || "").trim(), config);
   if (!model) return routes[0];
   const prefixed = routes.find((route) => model.startsWith(`${route.id}/`));
   if (prefixed) return prefixed;
@@ -1376,6 +1399,26 @@ function listConfiguredModels(config) {
     for (const model of route.models || []) models.push(model);
   }
   return [...new Set(models.length ? models : [getDefaultModel(config)])];
+}
+
+function claudeDesktopAliasForModel(modelId) {
+  const token = slug(modelId);
+  return token ? `claude-gateway-${token}` : "";
+}
+
+function buildClaudeDesktopAliasMap(config) {
+  const map = new Map();
+  for (const id of listConfiguredModels(config)) {
+    const alias = claudeDesktopAliasForModel(id);
+    if (alias) map.set(alias, id);
+  }
+  return map;
+}
+
+function resolveClaudeDesktopModel(model, config) {
+  const trimmed = String(model || "").trim();
+  if (!trimmed || !CLAUDE_DESKTOP_ALIASES) return trimmed;
+  return buildClaudeDesktopAliasMap(config).get(trimmed) || trimmed;
 }
 
 function slug(value) {
@@ -1410,11 +1453,13 @@ export {
   CLOUD_CONFIG_MODE,
   CONFIG_FILE,
   HTTP_ONLY,
+  claudeDesktopAliasForModel,
   configIsPersistent,
   configPathLabel,
   formatModelListResponse,
   getDefaultModel,
   listConfiguredModels,
+  modelIdsForPicker,
   normalizeModel,
   resolveModelRoute,
   resolveModelsConfigPath,

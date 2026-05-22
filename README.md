@@ -224,11 +224,36 @@ Zeabur 会注入 `PORT`；容器内没有本地 TLS 证书时，Gateway 自动�
 
 给其它 AI 应用填写：
 
-- **Base URL**：`https://你的域名.zeabur.app/v1`
+- **Base URL**：`https://你的域名.zeabur.app/v1`（OpenAI 兼容客户端）
 - **API Key**：`GATEWAY_API_KEY`（若已设置）
 - **模型名**：与管理页里一致
 
 连接入口路径与本地相同。OpenAI 客户端走 `POST /v1/chat/completions`；Anthropic 客户端走 `POST /v1/messages`。管理页里的渠道「协议类型」要和客户端入口一致。
+
+### Claude Desktop（Gateway / 第三方推理）
+
+Claude Desktop 会从 `GET /v1/models` 自动发现模型，但**只保留** id 以 `claude` 或 `anthropic` 开头的条目；`deepseek-ai/...`、`qwen/...` 会被过滤掉，从而出现 `Gateway returned no usable models`。
+
+Gateway 默认会为每个已配置模型额外暴露别名 id（形如 `claude-gateway-deepseek-ai-deepseek-v4-pro`），请求时自动映射回真实模型 id。
+
+在 Claude Desktop 里填写：
+
+| 项 | 值 |
+|----|-----|
+| Inference provider | Gateway |
+| Gateway base URL | `https://你的域名.zeabur.app`（**不要**加 `/v1`） |
+| Gateway API key | 你的 `GATEWAY_API_KEY` |
+| Gateway auth scheme | `bearer`（或 `x-api-key`） |
+
+若自动发现仍为空，可在配置里手动写 `inferenceModels`（名称须含 `claude` 等关键字），例如：
+
+```json
+"inferenceModels": [
+  { "name": "claude-gateway-deepseek-ai-deepseek-v4-pro" }
+]
+```
+
+别名与真实 id 的对应关系见 `GET /v1/models` 返回里的 `display_name`（`别名 → 真实id`）。
 
 ## Health and Troubleshooting
 

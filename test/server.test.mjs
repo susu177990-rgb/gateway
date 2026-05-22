@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   CONFIG_FILE,
+  claudeDesktopAliasForModel,
   getDefaultModel,
   formatModelListResponse,
   listConfiguredModels,
+  modelIdsForPicker,
   normalizeModel,
   resolveModelRoute,
   resolveRoute,
@@ -100,6 +102,23 @@ test("model list response is OpenAI-compatible", () => {
   assert.equal(body.data[0].owned_by, "gateway");
   assert.equal(body.first_id, "model-a");
   assert.equal(body.last_id, "model-b");
+});
+
+test("claude desktop aliases are claude-prefixed and map back to configured models", () => {
+  const alias = claudeDesktopAliasForModel("deepseek-ai/deepseek-v4-pro");
+  assert.match(alias, /^claude-gateway-/);
+  const claudeReq = { headers: { "user-agent": "ClaudeDesktop/1.0" } };
+  const claudeUrl = new URL("http://127.0.0.1/v1/models");
+  const ids = modelIdsForPicker(claudeReq, claudeUrl, config);
+  assert.ok(ids.every((id) => id.startsWith("claude-gateway-")), ids.join(", "));
+  assert.ok(ids.length >= 3, `expected multiple models, got ${ids.length}`);
+});
+
+test("openai clients still receive the full configured model list", () => {
+  const openaiReq = { headers: { "user-agent": "Cursor/1.0" } };
+  const url = new URL("http://127.0.0.1/v1/models");
+  const ids = modelIdsForPicker(openaiReq, url, config);
+  assert.deepEqual(ids, ["model-a", "model-b", "model-c", "claude-test"]);
 });
 
 test("tools are sanitized by keeping only usable function names", () => {

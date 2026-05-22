@@ -74,6 +74,16 @@ Gateway 是按协议入口转发的，不再偷偷互转：
 
 如果模型配置在 OpenAI 渠道，但客户端走 `/v1/messages`，会返回 `protocol_mismatch`。反过来也一样。解决方式是在管理页把该模型放到对应协议类型的渠道里，或给客户端换正确入口。
 
+## Claude Desktop 连 Gateway
+
+若提示 **Model discovery — Gateway returned no usable models**：
+
+1. **Gateway base URL** 填 `https://bahadir-api.zeabur.app`（不要写成 `/v1`）
+2. **API Key** 填 Zeabur 里的 `GATEWAY_API_KEY`
+3. Redeploy 最新 Gateway（Claude 请求 `/v1/models` 时会返回**全部** `claude-gateway-...` 别名，不是只有一个默认模型）
+4. Desktop 配置里 **`inferenceModels` 留空`** 才会自动拉列表；若只写了一个模型，就只会显示那一个
+5. 仍不行时，可手动写多个 `inferenceModels`，每个 `name` 须以 `claude` 开头
+
 ## 浏览器项目接 API（CORS）
 
 若前端报 **`Failed to fetch`**，在环境变量加（或保持默认）：
