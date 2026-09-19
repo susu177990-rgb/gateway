@@ -8,67 +8,88 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<div class="ambient a"></div><div class="ambient b"></div><div class="noise"></div>
 <div class="shell">
-  <aside class="sidebar">
+  <aside class="sidebar glass">
     <div>
       <div class="brand"><div class="mark">RH</div><div><strong>RH Studio</strong><small>RUNNINGHUB CONSOLE</small></div></div>
       <nav class="nav">
-        <button class="navbtn" data-route="workspace"><span class="ico">◆</span><span>工作台</span></button>
-        <button class="navbtn" data-route="settings"><span class="ico">⚙</span><span>设置</span></button>
+        <button class="navbtn" data-route="workspace"><span class="ico">◈</span><span>工作台</span></button>
+        <button class="navbtn" data-route="settings"><span class="ico">⌁</span><span>设置</span></button>
       </nav>
     </div>
-    <div class="sidefoot"><div class="statusline"><i id="sideDot" class="dot"></i><span id="sideStatus">API Key 未配置</span></div><div>独立 RunningHub API 控制台</div></div>
+    <div class="sidefoot"><div class="statusline"><i id="sideDot" class="dot"></i><span id="sideStatus">API Key 未配置</span></div><div class="mono">LOCAL-FIRST · PRIVATE KEY</div></div>
   </aside>
+
   <main class="main">
-    <div class="topbar"><div class="crumb">RH Studio / <b id="crumbTitle">工作台</b></div><div class="tag">RUNNINGHUB API V2</div></div>
+    <header class="topbar glass">
+      <div class="crumb"><span>RH Studio</span><i>/</i><b id="crumbTitle">工作台</b></div>
+      <div class="top-actions"><div class="live"><i></i><span>RUNNINGHUB API V2</span></div><div class="avatar">RH</div></div>
+    </header>
+
     <div id="workspacePage" class="content">
-      <div class="pagehead"><div><div class="eyebrow">WORKFLOW EXECUTION</div><h1>运行 AI Workflow</h1><p>配置 AI App、映射节点参数并直接提交到 RunningHub。</p></div></div>
-      <div id="keyWarning" class="note bad hidden" style="margin-bottom:14px">尚未配置 RunningHub API Key。请先前往 <b>设置</b> 页面保存 API Key。</div>
-      <div class="grid">
-        <section class="card">
-          <div class="cardhead"><h2><span class="step">01</span>运行配置</h2></div>
+      <section class="hero glass">
+        <div class="hero-copy">
+          <div class="eyebrow"><span></span>WORKFLOW ORCHESTRATION</div>
+          <h1>Build. Run.<br><em>Observe.</em></h1>
+          <p>把 RunningHub AI App、节点参数、文件输入与任务结果，集中在一个更干净的工作台里。</p>
+        </div>
+        <div class="hero-metrics">
+          <div class="metric"><small>API KEY</small><strong>LOCAL</strong><span>仅保存在当前浏览器</span></div>
+          <div class="metric"><small>TASK STATUS</small><strong>LIVE</strong><span>自动轮询 · 3 秒</span></div>
+          <div class="metric"><small>OUTPUT</small><strong>MULTI</strong><span>Image · Video · Audio · Text</span></div>
+        </div>
+      </section>
+
+      <div id="keyWarning" class="key-warning glass hidden"><i></i><span>尚未配置 RunningHub API Key。</span><button onclick="location.hash='#/settings'">前往设置 →</button></div>
+
+      <section class="workspace-grid">
+        <article class="card glass">
+          <div class="cardhead"><div><span class="step">01</span><h2>运行配置</h2></div><span class="kicker">CONFIG</span></div>
           <div class="body">
-            <label class="field"><div class="label"><span>AI APP ID</span></div><input id="appId" class="input" placeholder="2084320751339032577"></label>
-            <label class="field"><div class="label"><span>INSTANCE TYPE</span></div><select id="instanceType"><option value="default">Default · 24G</option><option value="plus">Plus · 48G</option><option value="ultra">Ultra · 84G</option></select></label>
-            <label class="field"><div class="label"><span>PERSONAL QUEUE</span></div><select id="personalQueue"><option value="false">关闭</option><option value="true">开启</option></select></label>
-            <div class="note">节点参数会按 RunningHub 的 <b>nodeInfoList</b> 格式提交。图片、视频、音频、普通文件会先上传到 RunningHub，再自动填入对应节点。</div>
+            <label class="field"><div class="label"><span>AI APP ID</span><i>required</i></div><input id="appId" class="input" placeholder="2084320751339032577"></label>
+            <label class="field"><div class="label"><span>INSTANCE TYPE</span><i>compute</i></div><select id="instanceType"><option value="default">Default · 24G</option><option value="plus">Plus · 48G</option><option value="ultra">Ultra · 84G</option></select></label>
+            <label class="field"><div class="label"><span>PERSONAL QUEUE</span><i>queue</i></div><select id="personalQueue"><option value="false">关闭</option><option value="true">开启</option></select></label>
+            <div class="note">节点会按 <b>nodeInfoList</b> 提交；文件输入先上传 RunningHub，再自动写入对应节点。</div>
           </div>
-        </section>
-        <section class="card">
-          <div class="cardhead"><h2><span class="step">02</span>节点参数</h2><div class="actions"><button id="addParam" class="btn">＋ 参数</button><button id="addFile" class="btn">＋ 文件</button></div></div>
+        </article>
+
+        <article class="card glass">
+          <div class="cardhead"><div><span class="step">02</span><h2>节点参数</h2></div><div class="actions"><button id="addParam" class="btn soft">＋ 参数</button><button id="addFile" class="btn soft">＋ 文件</button></div></div>
           <div id="nodes" class="nodes"></div>
-          <div class="nodesfoot"><div><small>READY NODES</small><b id="nodeCount">0 个有效节点</b></div><button id="runBtn" class="btn primary">运行工作流 →</button></div>
-        </section>
-      </div>
-      <section class="card results">
-        <div class="cardhead"><h2><span class="step">03</span>任务与结果</h2><span style="font-size:9px;color:#626d77">AUTO POLL · 3S</span></div>
-        <div id="resultArea"><div class="empty">提交任务后，这里会显示 Task ID、状态与生成结果。</div></div>
+          <div class="nodesfoot"><div><small>READY NODES</small><b id="nodeCount">0 个有效节点</b></div><button id="runBtn" class="btn primary">运行工作流 <span>↗</span></button></div>
+        </article>
+      </section>
+
+      <section class="card results glass">
+        <div class="cardhead"><div><span class="step">03</span><h2>任务与结果</h2></div><div class="pulse"><i></i><span>AUTO POLL · 3S</span></div></div>
+        <div id="resultArea"><div class="empty"><div class="empty-orb">◌</div><b>等待任务</b><span>提交工作流后，这里会显示 Task ID、实时状态与生成结果。</span></div></div>
       </section>
     </div>
 
     <div id="settingsPage" class="content hidden">
-      <div class="settingswrap">
-        <div class="pagehead"><div><div class="eyebrow">LOCAL SETTINGS</div><h1>设置</h1><p>在当前浏览器中保存 RunningHub API 配置，不使用环境变量。</p></div></div>
-        <section class="settingcard">
-          <div class="cardhead"><h2>RunningHub API</h2><span id="settingsBadge" class="tag">NOT CONFIGURED</span></div>
+      <section class="settings-hero glass">
+        <div><div class="eyebrow"><span></span>LOCAL SETTINGS</div><h1>设置</h1><p>敏感配置只留在你的浏览器里。部署代码不保存真实 API Key。</p></div>
+        <div class="shield">LOCAL<br><span>ONLY</span></div>
+      </section>
+      <div class="settings-grid">
+        <section class="settingcard glass">
+          <div class="cardhead"><div><span class="step">01</span><h2>RunningHub API</h2></div><span id="settingsBadge" class="status-badge">NOT CONFIGURED</span></div>
           <div class="settingrow">
             <h3>API Key</h3>
-            <p>API Key 只保存在此浏览器的本地存储中。运行任务时通过本站后端代理转发给 RunningHub，不写入部署代码。</p>
+            <p>API Key 仅写入当前浏览器 localStorage。运行任务时，通过本站后端代理转发给 RunningHub。</p>
             <div class="keystatus"><i id="settingsDot" class="dot"></i><span id="keyStatusText">尚未保存 API Key</span><span id="keyMask" class="mask"></span></div>
-            <div class="inline"><input id="apiKeyInput" class="input" type="password" autocomplete="off" placeholder="输入 RunningHub API Key"><button id="toggleKey" class="btn">显示</button><button id="saveKey" class="btn primary">保存</button></div>
-            <div class="actions" style="margin-top:8px"><button id="clearKey" class="btn danger">清除 API Key</button></div>
+            <div class="inline"><input id="apiKeyInput" class="input" type="password" autocomplete="off" placeholder="输入 RunningHub API Key"><button id="toggleKey" class="btn soft">显示</button><button id="saveKey" class="btn primary">保存</button></div>
+            <div class="actions sub"><button id="clearKey" class="btn danger">清除 API Key</button></div>
           </div>
-          <div class="settingrow">
-            <h3>本地配置</h3>
-            <p>AI App ID 与节点模板也会保存在当前浏览器，刷新页面不会丢失。</p>
-            <button id="clearLocal" class="btn ghost">清除工作台本地数据</button>
-          </div>
+          <div class="settingrow"><h3>本地工作台数据</h3><p>AI App ID、实例类型、队列开关与节点模板会自动保存在当前浏览器。</p><button id="clearLocal" class="btn soft">清除工作台本地数据</button></div>
         </section>
-        <div class="security">
-          <div><b>不使用环境变量</b><span>API Key 由你在设置页自行填写和覆盖。</span></div>
-          <div><b>不硬编码</b><span>部署源码中不会包含你的真实 API Key。</span></div>
-          <div><b>仅浏览器保存</b><span>没有账号数据库，不会把 Key 持久化到第三方数据库。</span></div>
-        </div>
+        <aside class="security glass">
+          <div class="security-title">PRIVACY MODEL</div>
+          <div class="security-item"><i>01</i><div><b>不使用环境变量</b><span>API Key 由你在设置页直接维护。</span></div></div>
+          <div class="security-item"><i>02</i><div><b>不硬编码</b><span>真实 Key 不进入部署源码。</span></div></div>
+          <div class="security-item"><i>03</i><div><b>仅浏览器保存</b><span>没有账号数据库，也不写入第三方存储。</span></div></div>
+        </aside>
       </div>
     </div>
   </main>
